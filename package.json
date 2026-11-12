@@ -12,7 +12,9 @@
     "dev:client": "npm -w @cryovanta/client run dev",
     "typecheck": "npm -ws run typecheck",
     "test": "vitest run",
-    "build": "npm -w @cryovanta/client run build"
+    "build": "npm -w @cryovanta/client run build",
+    "desktop": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dev",
+    "dist:win": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dist:win"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

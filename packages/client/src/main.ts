@@ -54,7 +54,7 @@ async function start(then: () => void) {
   err('');
   if (!connected) {
     const name = $<HTMLInputElement>('name').value.trim() || 'Bolt-' + Math.floor(Math.random() * 99);
-    const url = new URLSearchParams(location.search).get('server') ?? `ws://${location.hostname || 'localhost'}:8080`;
+    const url = new URLSearchParams(location.search).get('server') ?? (location.port === '5173' ? `ws://${location.hostname || 'localhost'}:8080` : `ws://${location.host}`); // dev: separate server; packaged/LAN: same origin
     try { await net.connect(url, name); connected = true; } catch { return err('Server non raggiungibile'); }
     net.onMsg = onMsg; net.onClose = () => { connected = false; room = null; renderRoom(); err('Connessione persa'); };
   }

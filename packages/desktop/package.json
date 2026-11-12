@@ -1,0 +1,52 @@
+{
+  "name": "@cryovanta/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "description": "Cryovanta - Neon Circuit",
+  "author": "Cryovanta",
+  "scripts": {
+    "bundle": "node build.mjs",
+    "dev": "npm run bundle && electron .",
+    "dist:win": "npm run bundle && electron-builder --win portable nsis --x64 --publish never",
+    "dist:dir": "npm run bundle && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0"
+  },
+  "build": {
+    "appId": "dev.cryovanta.neoncircuit",
+    "productName": "Cryovanta Neon Circuit",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../client/dist",
+        "to": "client"
+      }
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "CryovantaNeonCircuit-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "CryovantaNeonCircuit-Setup.exe"
+    }
+  }
+}

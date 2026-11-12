@@ -14,6 +14,17 @@ npm test               # 44 test: fisica, impatti, lobby/cap, match completo via
 npm run typecheck
 ```
 
+### App desktop (.exe, offline)
+
+```bash
+npm run desktop     # avvia l'app Electron in locale (server + client integrati)
+npm run dist:win    # produce packages/desktop/release/CryovantaNeonCircuit-portable.exe (+ installer su Windows)
+```
+
+L'exe non richiede Node né internet: avvia il server di gioco al suo interno (porta 8080, o una libera se occupata) e apre la finestra.
+Menu *Gioco → Come far giocare amici in LAN* mostra l'indirizzo da aprire nel browser degli altri PC. In alternativa la
+GitHub Action `Build Windows exe` (avvio manuale) costruisce installer e portable su un runner Windows.
+
 Controlli: **WASD/frecce** muovi · **Spazio** salta (premi di nuovo in aria = propulsore) · **Shift** tuffo · **E / click** usa oggetto · tasto destro + mouse: ruota camera.
 
 Architettura, netcode, tabella degli impatti, come aggiungere un gioco: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
