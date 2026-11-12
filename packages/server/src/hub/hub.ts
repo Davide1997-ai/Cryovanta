@@ -1,0 +1,114 @@
+import { randomBytes } from 'node:crypto';
+import { PROTOCOL_VERSION, parseClientMsg, type ClientMsg, type ErrorCode } from '@cryovanta/shared';
+import { Client } from './client';
+import type { GameModule } from './game';
+import { Room } from './room';
+
+export interface HubOptions { maxRooms: number; maxClients: number; clock: () => number; }
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+
+/** Matchmaking + room registry. Single-threaded => `quickplay` find-or-create is atomic. */
+export class Hub {
+  readonly rooms = new Map<string, Room>();
+  readonly clients = new Set<Client>();
+  private byToken = new Map<string, { room: Room; slot: number }>();
+  private games = new Map<string, GameModule>();
+
+  constructor(games: GameModule[], readonly opts: HubOptions = { maxRooms: 500, maxClients: 3500, clock: Date.now }) {
+    for (const g of games) this.games.set(g.id, g);
+  }
+
+  // ------------------------------------------------------------ connection lifecycle
+  accept(client: Client): boolean {
+    if (this.clients.size >= this.opts.maxClients) return false;
+    this.clients.add(client);
+    return true;
+  }
+
+  onClose(client: Client) {
+    this.clients.delete(client);
+    client.room?.disconnect(client);
+  }
+
+  onMessage(client: Client, text: string) {
+    if (text.length > 4096) return this.err(client, 'BAD_REQUEST', 'Message too large');
+    if (!client.limiter.take()) return this.err(client, 'RATE_LIMITED', 'Slow down');
+    const msg = parseClientMsg(text);
+    if (!msg) return this.err(client, 'BAD_REQUEST', 'Malformed message');
+    this.dispatch(client, msg);
+  }
+
+  private dispatch(c: Client, m: ClientMsg) {
+    if (m.k === 'hello') return this.hello(c, m);
+    if (!c.greeted) return this.err(c, 'BAD_REQUEST', 'Say hello first');
+    switch (m.k) {
+      case 'ping': return c.send({ k: 'pong', t: m.t, serverTime: this.opts.clock() });
+      case 'input': return c.room?.handleInput(c, m.frames);
+      case 'ready': return c.room ? c.room.setReady(c, m.ready) : this.err(c, 'NOT_IN_ROOM', 'Not in a room');
+      case 'leave': if (c.room) { const r = c.room; this.byToken.delete(c.token); r.leave(c); this.gc(r); c.send({ k: 'left' }); } return;
+      case 'quickplay': return this.quickplay(c, m.game);
+      case 'create': return this.create(c, m.game, m.isPrivate);
+      case 'join': return this.joinByCode(c, m.code);
+    }
+  }
+
+  private hello(c: Client, m: Extract<ClientMsg, { k: 'hello' }>) {
+    if (m.v !== PROTOCOL_VERSION) return this.err(c, 'BAD_VERSION', `Server speaks protocol v${PROTOCOL_VERSION}`);
+    c.name = m.name;
+    const prior = m.token ? this.byToken.get(m.token) : undefined;
+    c.token = prior ? m.token! : randomBytes(16).toString('hex');
+    c.greeted = true;
+    c.send({ k: 'welcome', v: PROTOCOL_VERSION, token: c.token, serverTime: this.opts.clock() });
+    if (prior) {
+      const slot = prior.room.findReserved(c.token);
+      if (slot >= 0 && prior.room.resume(c, slot)) { prior.room.sendCurrent(c); prior.room.broadcastRoom(); return; }
+      this.byToken.delete(c.token);
+    }
+  }
+
+  // ------------------------------------------------------------ matchmaking
+  private quickplay(c: Client, gameId: string) {
+    const game = this.games.get(gameId); if (!game) return this.err(c, 'UNKNOWN_GAME', gameId);
+    if (c.room) return this.err(c, 'BAD_REQUEST', 'Already in a room');
+    // fill the fullest joinable public room first so lobbies reach quorum quickly
+    let best: Room | null = null;
+    for (const r of this.rooms.values()) {
+      if (r.game.id !== gameId || r.isPrivate || !r.joinable) continue;
+      if (!best || r.size > best.size) best = r;
+    }
+    this.enter(c, best ?? this.newRoom(game, false));
+  }
+  private create(c: Client, gameId: string, isPrivate: boolean) {
+    const game = this.games.get(gameId); if (!game) return this.err(c, 'UNKNOWN_GAME', gameId);
+    if (c.room) return this.err(c, 'BAD_REQUEST', 'Already in a room');
+    this.enter(c, this.newRoom(game, isPrivate));
+  }
+  private joinByCode(c: Client, code: string) {
+    if (c.room) return this.err(c, 'BAD_REQUEST', 'Already in a room');
+    const r = this.rooms.get(code);
+    if (!r) return this.err(c, 'ROOM_NOT_FOUND', 'No such room');
+    this.enter(c, r);
+  }
+  private enter(c: Client, room: Room) {
+    const res = room.tryJoin(c);
+    if (!res.ok) { this.gc(room); return this.err(c, res.code, res.msg); }
+    this.byToken.set(c.token, { room, slot: res.slot });
+  }
+  private newRoom(game: GameModule, isPrivate: boolean): Room {
+    if (this.rooms.size >= this.opts.maxRooms) throw new Error('room limit');
+    let code: string;
+    do { code = Array.from(randomBytes(5), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(''); } while (this.rooms.has(code));
+    const room = new Room(code, game, isPrivate, this.opts.clock);
+    room.onEmpty = (r) => this.gc(r);
+    this.rooms.set(code, room);
+    return room;
+  }
+  private gc(room: Room) {
+    if (room.size === 0) { this.rooms.delete(room.code); for (const [t, v] of this.byToken) if (v.room === room) this.byToken.delete(t); }
+  }
+
+  /** Called by the global loop. */
+  tick(now = this.opts.clock()) { for (const r of [...this.rooms.values()]) r.tick(now); }
+
+  private err(c: Client, code: ErrorCode, msg: string) { c.send({ k: 'error', code, msg }); }
+}
