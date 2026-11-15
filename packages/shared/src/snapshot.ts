@@ -15,7 +15,7 @@ export function encodePlayer(p: PlayerState): SnapPlayer {
   };
 }
 
-export function buildSnapshot(m: Match, ack: number[], events: Snapshot['ev']): Snapshot {
+export function buildSnapshot(m: Match, ack: number[], events: Snapshot['ev'], cam: readonly number[] = []): Snapshot {
   const sim = m.sim;
   return {
     k: 'snap', tick: sim.tick, ack,
@@ -29,6 +29,7 @@ export function buildSnapshot(m: Match, ack: number[], events: Snapshot['ev']): 
     qf: sim.finishers, qq: sim.cfg.qualify, fz: sim.course.finishZ > 1e6 ? 0 : sim.course.finishZ, sv: sim.course.survival ? 1 : 0,
     cw: sim.crown ? [q(sim.crown.x), q(sim.crown.y), q(sim.crown.z), sim.crown.holder] : null, cs: sim.crownScore.map((v) => q(v)),
     tv: sim.dynTiles.flatMap((id) => [id, q(sim.course.platforms[id].vanishAt ?? 0)]),
+    cy: Array.from({ length: sim.players.length }, (_, i) => Math.round((cam[i] ?? 0) * 100)),
   };
 }
 

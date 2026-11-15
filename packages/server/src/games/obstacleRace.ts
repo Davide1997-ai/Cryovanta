@@ -60,6 +60,10 @@ export class ObstacleRaceSession implements GameSession {
     }
   }
 
+  /** Camera yaw is steered by each phone; it only feeds that player's split-screen camera (movement is already rotated on the phone). */
+  private camYaw: number[] = new Array(MAX_PLAYERS_PER_ROOM).fill(0);
+  handleCam(slot: number, yaw: number) { if (slot >= 0 && slot < this.camYaw.length && Number.isFinite(yaw)) this.camYaw[slot] = Math.atan2(Math.sin(yaw), Math.cos(yaw)); }
+
   /** Emotes are cosmetic events relayed to everybody (screens animate them); rate-limited per player. */
   handleEmote(slot: number, id: number) {
     if (!this.match || this.finished || this.match.sim.tick - this.lastEmote[slot] < EMOTE_COOLDOWN_TICKS) return;
@@ -95,14 +99,14 @@ export class ObstacleRaceSession implements GameSession {
       const sim = simBefore; this.roundLogs.push({ map: sim.cfg.mapId, rule: sim.course.crown ? 'crown' : sim.course.survival ? 'survival' : 'race', seconds: Math.round((sim.tick / 60 - 3) * 10) / 10, reason: this.match.lastResult.reason });
     }
     // Big screens have no prediction, so they get state on EVERY tick (60 Hz); players/phones every SNAPSHOT_EVERY ticks.
-    if (this.host.displayCount > 0) this.host.sendDisplays(buildSnapshot(this.match, this.ack, evTick));
+    if (this.host.displayCount > 0) this.host.sendDisplays(buildSnapshot(this.match, this.ack, evTick, this.camYaw));
     if (++this.ticks % SNAPSHOT_EVERY === 0) {
-      this.host.sendPlayers(buildSnapshot(this.match, this.ack, this.evBuf));
+      this.host.sendPlayers(buildSnapshot(this.match, this.ack, this.evBuf, this.camYaw));
       this.evBuf = [];
     }
     if (this.match.phase === 'over') {
       this.finished = true;
-      this.host.broadcast(buildSnapshot(this.match, this.ack, this.evBuf));
+      this.host.broadcast(buildSnapshot(this.match, this.ack, this.evBuf, this.camYaw));
       const standings = this.match.standings(), n = standings.length, xp = new Array<number>(MAX_PLAYERS_PER_ROOM).fill(0);
       standings.forEach((s, i) => { xp[s] = xpForMatch(i, n, s === this.match.winner) + Math.round(this.match.sim.crownScore[s] * 0.5); });
       this.host.broadcast({ k: 'matchEnd', standings, winner: this.match.winner, points: this.match.points, teams: this.match.teams, teamPoints: this.match.teamPoints, xp });

@@ -52,6 +52,7 @@ export class Hub {
       case 'leave': if (c.room) { const r = c.room; this.byToken.delete(c.token); r.leave(c); this.gc(r); c.send({ k: 'left' }); } return;
       case 'look': { c.look = sanitizeLook({ c: m.c, h: m.h }, c.level, c.look ?? defaultLook(Math.max(0, c.slot))); c.room?.updateLook(c); return; }
       case 'emote': return c.room?.handleEmote(c, m.id);
+      case 'cam': return c.room?.handleCam(c, m.yaw);
       case 'screen': return this.screen(c, m.game, m.code);
       case 'start': { const r = c.display; if (!r) return this.err(c, 'NOT_HOST', 'Only a screen can force the start'); if (!r.forceStart()) this.err(c, 'BAD_REQUEST', 'Servono almeno 2 giocatori'); return; }
       case 'config': { const rm = c.room ?? c.display; if (!rm) return this.err(c, 'NOT_IN_ROOM', 'Not in a room'); const e = rm.setConfig(c, m.map, m.mode); if (e) this.err(c, e, e === 'NOT_HOST' ? 'Solo l\'host può cambiare le regole' : 'Opzione non valida'); return; }

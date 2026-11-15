@@ -29,6 +29,7 @@ export type ClientMsg =
   | { k: 'hello'; v: number; name: string; token?: string; look?: Look }
   | { k: 'look'; c: number; h: number }
   | { k: 'emote'; id: number }
+  | { k: 'cam'; yaw: number }
   | { k: 'quickplay'; game: string }
   | { k: 'create'; game: string; isPrivate: boolean }
   | { k: 'join'; code: string }
@@ -72,6 +73,8 @@ export interface Snapshot {
   cw: [number, number, number, number] | null; cs: number[];
   /** Hex-A-Gone: flat [tileId, vanishAtSeconds, ...] for tiles somebody stepped on */
   tv: number[];
+  /** per-slot camera yaw in centi-radians (each phone steers its own split-screen camera) */
+  cy: number[];
 }
 export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; map: string; mode: string; difficulty: number; /** team per slot (-1 none) */ teams: number[]; /** race | survival | crown */ rule: string; }
 export interface RoundEnd { k: 'roundEnd'; qualified: number[]; eliminated: number[]; teamPoints?: number[]; }
@@ -122,6 +125,7 @@ export function parseClientMsg(text: string): ClientMsg | null {
     case 'screen': return typeof m.game === 'string' && m.game.length <= 32 && (m.code === undefined || (typeof m.code === 'string' && /^[A-Z0-9]{4,6}$/.test(m.code.toUpperCase()))) ? { k: 'screen', game: m.game, code: typeof m.code === 'string' ? m.code.toUpperCase() : undefined } : null;
     case 'start': return { k: 'start' };
     case 'look': return Number.isInteger(m.c) && Number.isInteger(m.h) ? { k: 'look', c: m.c as number, h: m.h as number } : null;
+    case 'cam': { const y = num(m.yaw); return y === null || Math.abs(y) > 1000 ? null : { k: 'cam', yaw: y }; }
     case 'emote': return Number.isInteger(m.id) && (m.id as number) >= 0 && (m.id as number) < 8 ? { k: 'emote', id: m.id as number } : null;
     case 'leave': return { k: 'leave' };
     case 'input': { const frames = parseInputFrames(m.frames); return frames ? { k: 'input', frames } : null; }

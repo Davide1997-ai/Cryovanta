@@ -21,6 +21,7 @@ export interface GameSession {
   /** Called at TICK_RATE while the room is in the `playing` phase. */
   tick(): void;
   handleEmote?(slot: number, id: number): void;
+  handleCam?(slot: number, yaw: number): void;
   /** Slot permanently gone (left, or reconnect grace expired). */
   removePlayer(slot: number): void;
 }

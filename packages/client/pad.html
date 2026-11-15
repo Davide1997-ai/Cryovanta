@@ -29,6 +29,8 @@
     #play { padding:0; display:block; }
     #hudTop { position:absolute; left:0; right:0; top:max(4px, env(safe-area-inset-top)); display:flex; justify-content:space-between; align-items:center; padding:0 max(14px, env(safe-area-inset-left)); font-weight:800; font-size:calc(var(--u)*5); pointer-events:none; text-shadow:0 0 10px var(--me); }
     #who { display:flex; align-items:center; gap:10px; } #who i { width:16px; height:16px; border-radius:50%; background:var(--me); box-shadow:0 0 12px var(--me); }
+    #camZone { position:absolute; left:56%; right:0; top:14%; bottom:0; touch-action:none; }
+    #camHint { position:absolute; right:calc(4% + env(safe-area-inset-right)); top:18%; font-size:13px; opacity:.4; pointer-events:none; text-align:right; }
     #stickZone { position:absolute; left:0; top:14%; bottom:0; width:56%; touch-action:none; }
     #stickHint { position:absolute; left:calc(8% + env(safe-area-inset-left)); top:55%; width:34%; text-align:center; font-size:15px; opacity:.45; pointer-events:none; }
     #stickBase { display:none; position:fixed; width:calc(var(--u)*32); height:calc(var(--u)*32); margin:calc(var(--u)*-16) 0 0 calc(var(--u)*-16); border-radius:50%; border:3px solid rgba(255,255,255,.55); background:radial-gradient(circle, color-mix(in srgb, var(--me) 35%, transparent), rgba(255,255,255,.05)); box-shadow:0 0 22px var(--me); pointer-events:none; }
@@ -90,6 +92,7 @@
 
   <div id="play" class="screen hidden">
     <div id="hudTop"><div id="who"><i></i><span id="pname"></span></div><div id="rank">#–</div><div id="dist"></div><div id="status"></div></div>
+    <div id="camZone"></div><div id="camHint">↔ trascina qui per girare la visuale</div>
     <div id="stickZone"></div>
     <div id="stickHint">☝️ tocca e trascina qui per muoverti</div><div id="stickBase"><div id="stickKnob"></div></div>
     <div id="ring"><div id="dot"></div></div><div id="ringLbl">inclina per muoverti</div>

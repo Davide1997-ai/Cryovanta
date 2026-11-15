@@ -186,8 +186,8 @@ function onMsg(m: ServerMsg) {
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
 (window as any).__cv = { get robots() { return robots; }, get robotPos() { return robotPos; }, get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
-interface PlayerCam { cam: THREE.PerspectiveCamera; pos: THREE.Vector3; look: THREE.Vector3; init: boolean; baseY: number }
-const playerCams: PlayerCam[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => ({ cam: new THREE.PerspectiveCamera(60, 1, 0.1, 1800), pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, baseY: 0 }));
+interface PlayerCam { cam: THREE.PerspectiveCamera; pos: THREE.Vector3; look: THREE.Vector3; init: boolean; baseY: number; yaw: number }
+const playerCams: PlayerCam[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => ({ cam: new THREE.PerspectiveCamera(60, 1, 0.1, 1800), pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, baseY: 0, yaw: 0 }));
 const tmpV2 = new THREE.Vector3();
 const robotPos: THREE.Vector3[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => new THREE.Vector3());
 const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3(), tmpV = new THREE.Vector3();
@@ -348,12 +348,14 @@ const setTxt = (el: Element, key: string, v: string) => { if (cache.get(key) !==
 const hexc = (n: number) => '#' + n.toString(16).padStart(6, '0');
 function hideCells() { $('cells').style.display = 'none'; $('board').style.display = 'none'; }
 
-function followCam(pc: PlayerCam, tgt: THREE.Vector3, dt: number) {
+function followCam(pc: PlayerCam, tgt: THREE.Vector3, dt: number, yawTarget = 0) {
   const back = 9.2, up = 5.2, k = 1 - Math.exp(-11 * dt), kl = 1 - Math.exp(-14 * dt); // tight follow: a floaty camera makes controls feel laggy
-  const dx = tgt.x, dy = tgt.y + up, dz = tgt.z - back;
-  if (!pc.init) { pc.pos.set(dx, dy, dz); pc.look.set(tgt.x, tgt.y + 1.4, tgt.z + 5); pc.init = true; }
+  pc.yaw = lerpAngle(pc.yaw, yawTarget, 1 - Math.exp(-16 * dt)); // phone-steered view, smoothed between network snapshots
+  const sx = Math.sin(pc.yaw), cz = Math.cos(pc.yaw);
+  const dx = tgt.x - sx * back, dy = tgt.y + up, dz = tgt.z - cz * back, lx = tgt.x + sx * 5, lz = tgt.z + cz * 5;
+  if (!pc.init) { pc.yaw = yawTarget; pc.pos.set(dx, dy, dz); pc.look.set(lx, tgt.y + 1.4, lz); pc.init = true; }
   pc.pos.x += (dx - pc.pos.x) * k; pc.pos.y += (dy - pc.pos.y) * k; pc.pos.z += (dz - pc.pos.z) * k;
-  pc.look.x += (tgt.x - pc.look.x) * kl; pc.look.y += (tgt.y + 1.4 - pc.look.y) * kl; pc.look.z += (tgt.z + 5 - pc.look.z) * kl;
+  pc.look.x += (lx - pc.look.x) * kl; pc.look.y += (tgt.y + 1.4 - pc.look.y) * kl; pc.look.z += (lz - pc.look.z) * kl;
   pc.cam.position.copy(pc.pos); pc.cam.lookAt(pc.look);
 }
 
@@ -369,7 +371,7 @@ function splitFrame(dt: number, s: Snapshot) {
     // an eliminated player's cell spectates the leader; a falling robot is watched from the last ground height (no chasing into the void)
     const tgt = tmpV2.copy(p && p.al === 1 ? robotPos[slot] : leader);
     if (!p || p.al !== 1 || p.g === 1 || !pc.init) pc.baseY = tgt.y; else tgt.y = Math.max(tgt.y, pc.baseY);
-    followCam(pc, tgt, dt);
+    followCam(pc, tgt, dt, (s.cy?.[slot] ?? 0) / 100);
     return { cam: pc.cam, rect: cells[i], before: () => { stage.focusView(pc.cam); for (let r = 0; r < robots.length; r++) robots[r].setDetail(pc.cam.position.distanceTo(robotPos[r]) < 24); } };
   });
   stage.renderViews(views);

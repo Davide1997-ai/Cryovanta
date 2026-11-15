@@ -39,6 +39,7 @@ Il gioco si vede sul **PC** (o su una TV collegata): lo schermo si **divide in u
 | Comando | Cosa fa |
 |---|---|
 | **Joystick** (tocca e trascina a sinistra, compare dove metti il pollice) | muove il robot, analogico, nessuno smussamento aggiunto |
+| **Visuale** (trascina a destra, nello spazio vuoto) | gira la camera del tuo riquadro; il joystick è relativo alla visuale (su = avanti rispetto a dove guardi) |
 | **SALTA** | salta; premuto di nuovo in aria = propulsore |
 | **SPINGI** | spinta corta davanti a te: manda indietro e fa barcollare chi hai davanti (anche giù da un bordo). Ricarica ~0,75 s |
 | **AFFERRA** (tieni premuto) | afferri il robot davanti e lo trascini: lui va al 40% e non può saltare, tu al 75%. Dura ~2,4 s, poi ricarica. Premi **SPINGI** mentre lo tieni per **lanciarlo** |

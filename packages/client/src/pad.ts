@@ -206,17 +206,30 @@ $('bEmote').addEventListener('pointerdown', (e) => { e.stopPropagation(); $('emo
 $('emoteWheel').addEventListener('pointerdown', (e) => { const b = (e.target as HTMLElement).closest('button'); if (!b) return; net.send({ k: 'emote', id: Number(b.dataset.e) }); $('emoteWheel').classList.remove('open'); buzz(10); });
 void EMOTES;
 
+// ---- camera: drag on the right side to turn your own split-screen view; the stick is relative to that view ----
+let camYaw = 0, camSent = 0, camSentT = 0;
+{
+  const zone = $('camZone'); let cid = -1, lastX = 0;
+  zone.addEventListener('pointerdown', (e) => { if (cid >= 0) return; cid = e.pointerId; lastX = e.clientX; zone.setPointerCapture(e.pointerId); $('camHint').style.display = 'none'; });
+  zone.addEventListener('pointermove', (e) => { if (e.pointerId !== cid) return; camYaw -= (e.clientX - lastX) * 0.011; lastX = e.clientX; camYaw = Math.atan2(Math.sin(camYaw), Math.cos(camYaw)); });
+  const end = (e: PointerEvent) => { if (e.pointerId === cid) cid = -1; };
+  zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
+  $('modeBtn').addEventListener('dblclick', () => { camYaw = 0; });
+}
+function sendCam(now: number) { if (camYaw !== camSent && now - camSentT > 45) { net.send({ k: 'cam', yaw: +camYaw.toFixed(3) }); camSent = camYaw; camSentT = now; } }
+
 // ------------------------------------------------------------------ 60 Hz control loop
 let acc = 0, last = performance.now(), seq = 0, unsent = 0, lastSend = 0; const buf: InputFrame[] = [];
 function sample(): InputFrame {
   let x = 0, y = 0;
   if (mode === 'tilt' && lastAngles) { const v = tiltToMove(lastAngles, neutral, DEFAULT_TILT); sx = smooth(sx, v.x, DT); sy = smooth(sy, v.y, DT); x = sx; y = sy; }
   else { sx = stick.x; sy = stick.y; x = sx; y = sy; } // joystick: no smoothing => zero added latency
-  const f: InputFrame = { seq: ++seq, mx: -x, mz: y, jump: tJump || jumpLatch, dive: tDive || diveLatch, use: useLatch, push: pushLatch, grab: tGrab }; // screen camera looks down +Z: right = -X
+  const cy = Math.cos(camYaw), sy2 = Math.sin(camYaw); // stick up = away from the camera, whatever its yaw
+  const f: InputFrame = { seq: ++seq, mx: -x * cy + y * sy2, mz: x * sy2 + y * cy, jump: tJump || jumpLatch, dive: tDive || diveLatch, use: useLatch, push: pushLatch, grab: tGrab }; // screen camera looks down +Z: right = -X
   jumpLatch = diveLatch = useLatch = pushLatch = false; return f;
 }
 function frame(now: number) {
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const dt = Math.min(0.1, (now - last) / 1000); last = now; sendCam(now);
   const active = room?.phase === 'playing' && !eliminated && !$('play').classList.contains('hidden');
   if (active) {
     acc += dt;

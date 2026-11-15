@@ -161,6 +161,10 @@ export class Room {
     const m = this.slots[client.slot]; if (!m || m.client !== client || !client.look) return;
     m.look = client.look; this.broadcastRoom();
   }
+  handleCam(client: Client, yaw: number) {
+    const m = this.slots[client.slot];
+    if (this.phase === 'playing' && m && m.client === client) this.session?.handleCam?.(client.slot, yaw);
+  }
   handleEmote(client: Client, id: number) {
     const m = this.slots[client.slot];
     if (this.phase === 'playing' && m && m.client === client) this.session?.handleEmote?.(client.slot, id);
