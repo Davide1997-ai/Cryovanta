@@ -1,5 +1,5 @@
 import {
-  PROTOCOL_VERSION, Predictor, botInput, courseForRound, type ClientMsg, type InputFrame, type MatchEnd, type RoomInfo, type ServerMsg,
+  PROTOCOL_VERSION, Predictor, botInput, buildMap, type ClientMsg, type InputFrame, type MatchEnd, type RoomInfo, type ServerMsg,
 } from '@cryovanta/shared';
 import { createObstacleRaceModule } from '../packages/server/src/games/obstacleRace';
 import { Client } from '../packages/server/src/hub/client';
@@ -84,7 +84,7 @@ export class Bot {
       case 'room': this.room = m.room; this.slot = m.you; break;
       case 'error': this.errors.push(m.code); break;
       case 'round':
-        this.roundsSeen++; this.predictor = new Predictor(courseForRound(m.seed, m.round), this.slot);
+        this.roundsSeen++; this.predictor = new Predictor(buildMap(m.map, m.seed, m.difficulty), this.slot);
         this.autopilot = m.participants.includes(this.slot); break;
       case 'snap':
         if (this.predictor) { this.predictor.reconcile(m); if (this.predictor.running) { this.maxError = Math.max(this.maxError, this.predictor.lastError); this.errors_.push(this.predictor.lastError); } }

@@ -1,8 +1,8 @@
 import {
-  INTERMISSION_SECONDS, MAX_INPUT_QUEUE, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START, Match, SNAPSHOT_EVERY, buildSnapshot,
+  INTERMISSION_SECONDS, MAP_IDS, MODE_IDS, MAX_INPUT_QUEUE, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START, Match, SNAPSHOT_EVERY, buildSnapshot,
   type InputFrame, type SimEvent,
 } from '@cryovanta/shared';
-import type { GameHost, GameModule, GameSession } from '../hub/game';
+import type { GameHost, GameModule, GameSession, RoomOptions } from '../hub/game';
 
 /** If a client's input queue runs dry we repeat its last frame this many ticks before falling back to neutral. */
 const STARVE_REPEAT_TICKS = 6;
@@ -30,8 +30,8 @@ export class ObstacleRaceSession implements GameSession {
 
   constructor(private host: GameHost, private seedFn: () => number) {}
 
-  start(slots: number[]) {
-    this.match = new Match(slots, this.seedFn());
+  start(slots: number[], options: RoomOptions) {
+    this.match = new Match(slots, this.seedFn(), options);
     this.announceRound();
   }
 
@@ -81,14 +81,14 @@ export class ObstacleRaceSession implements GameSession {
     if (this.match.phase === 'over') {
       this.finished = true;
       this.host.broadcast(buildSnapshot(this.match, this.ack, this.evBuf));
-      this.host.broadcast({ k: 'matchEnd', standings: this.match.standings(), winner: this.match.winner });
+      this.host.broadcast({ k: 'matchEnd', standings: this.match.standings(), winner: this.match.winner, points: this.match.points });
     }
   }
 
   private announceRound() {
     this.announcedRound = this.match.roundIdx;
     const sim = this.match.sim;
-    this.host.broadcast({ k: 'round', round: this.match.roundIdx, seed: sim.cfg.seed, participants: sim.cfg.participants, qualify: sim.cfg.qualify, tick: sim.tick });
+    this.host.broadcast({ k: 'round', round: this.match.roundIdx, seed: sim.cfg.seed, participants: sim.cfg.participants, qualify: sim.cfg.qualify, tick: sim.tick, map: sim.cfg.mapId, mode: this.match.mode.id, difficulty: sim.cfg.difficulty });
     for (const s of sim.cfg.participants) { this.queues[s].length = 0; }
   }
 }
@@ -99,6 +99,7 @@ export function createObstacleRaceModule(seedFn: () => number = () => (Math.rand
     displayName: 'Neon Circuit',
     minPlayers: MIN_PLAYERS_TO_START,
     maxPlayers: MAX_PLAYERS_PER_ROOM,
+    options: { map: ['random', ...MAP_IDS], mode: MODE_IDS },
     createSession: (host) => new ObstacleRaceSession(host, seedFn),
   };
 }

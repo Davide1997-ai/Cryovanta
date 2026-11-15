@@ -6,11 +6,24 @@ boost e trappole rilasciabili.
 
 ![gameplay](docs/screenshot-gameplay.png)
 
+### Avvio automatico (consigliato)
+
+| Sistema | Cosa fare |
+|---|---|
+| **Windows** | doppio clic su **`start-game.bat`** |
+| **macOS / Linux** | `./start-game.sh` |
+| qualsiasi | `npm run play` |
+
+Lo script controlla Node, installa le dipendenze se mancano, ricompila il client solo se è cambiato, sceglie una porta libera, avvia il server,
+apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--port=9000`, `--no-open`, `--no-qr`, `--rebuild`.
+
+### Sviluppo manuale
+
 ```bash
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 44 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 74 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
@@ -40,6 +53,25 @@ Menu *Gioco → Come far giocare amici in LAN* mostra l'indirizzo da aprire nel 
 GitHub Action `Build Windows exe` (avvio manuale) costruisce installer e portable su un runner Windows.
 
 Controlli: **WASD/frecce** muovi · **Spazio** salta (premi di nuovo in aria = propulsore) · **Shift** tuffo · **E / click** usa oggetto · tasto destro + mouse: ruota camera.
+
+### Mappe e modalità
+
+Tre mappe (scelte dall'host in lobby o "casuale", una diversa a ogni round) e quattro modalità:
+
+| Mappa | Carattere |
+|---|---|
+| **Neon Circuit** | piattaforme sospese nello spazio, veloce e tecnica |
+| **Titan Gauntlet** | parco giochi **gigante** (~650 unità) di giorno: barre rotanti, martelli a pendolo con palle chiodate, rulli, trampolini, nastri trasportatori, ghiaccio, melma, vento, tessere che spariscono, pistoni |
+| **Frost Run** | pista ghiacciata con neve: derapate, bufere laterali, pendoli |
+
+| Modalità | Regole |
+|---|---|
+| **Eliminazione** | passa la metà più veloce, ultimo in piedi vince (7→4→2→1) |
+| **Corsa singola** | un solo round, vince chi arriva prima |
+| **Gran Premio** | 3 round, punti 10-8-6-5-4-3-2, vince chi ne ha di più |
+| **Caos** | eliminazione con casse oggetto che ricompaiono in ~1 s |
+
+Aggiungere una mappa = una voce in `packages/shared/src/maps.ts`; una modalità = una voce in `modes.ts`.
 
 Architettura, netcode, tabella degli impatti, come aggiungere un gioco: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

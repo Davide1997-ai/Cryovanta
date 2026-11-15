@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  DT, INTERP_DELAY_MS, MAX_PLAYERS_PER_ROOM, Predictor, courseForRound, encodePlayer, lerp, lerpAngle,
+  DT, INTERP_DELAY_MS, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
   type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
 } from '@cryovanta/shared';
 import { Input } from './input';
@@ -28,6 +28,7 @@ let participants: number[] = [];
 /** Adaptive jitter buffer: widens when Wi-Fi delivers snapshots in bursts, shrinks again when it calms down. */
 let interpDelay = INTERP_DELAY_MS, snapGap = 50, lastSnapT = 0;
 let toastTimer = 0;
+let mapName = '', modeName = '';
 
 // ------------------------------------------------------------------ UI
 const err = (t: string) => { $('err').textContent = t; };
@@ -43,6 +44,14 @@ function renderRoom() {
   $('rcode').textContent = room.code; $('rcount').textContent = String(room.members.length);
   $('rphase').textContent = room.phase === 'countdown' ? `Si parte tra ${room.countdown}…` : room.phase === 'results' ? 'Risultati' : 'In attesa';
   $('members').innerHTML = room.members.map((m) => `<li><span style="color:#${ROBOT_COLORS[m.slot].toString(16).padStart(6, '0')}">● ${esc(m.name)}${m.host ? ' 👑' : ''}${m.slot === me ? ' (tu)' : ''}</span><span class="${m.ready ? 'ready' : 'muted'}">${!m.connected ? 'offline' : m.ready ? 'PRONTO' : '…'}</span></li>`).join('');
+  const isHost = room.members.find((m) => m.host)?.slot === me;
+  const selMap = $<HTMLSelectElement>('selMap'), selMode = $<HTMLSelectElement>('selMode');
+  if (!selMap.options.length) {
+    selMap.innerHTML = ['random', ...MAP_IDS].map((id) => `<option value="${id}">${id === 'random' ? '🎲 Mappa casuale' : '🗺️ ' + MAPS[id].name}</option>`).join('');
+    selMode.innerHTML = MODE_IDS.map((id) => `<option value="${id}">🏁 ${MODES[id].name}</option>`).join('');
+  }
+  selMap.value = room.options.map; selMode.value = room.options.mode; selMap.disabled = selMode.disabled = !isHost;
+  $('optDesc').textContent = (room.options.map === 'random' ? 'Ogni round una mappa diversa. ' : MAPS[room.options.map]?.desc + ' ') + (MODES[room.options.mode]?.desc ?? '') + (isHost ? '' : ' (solo l\'host può cambiare)');
   const mine = room.members.find((m) => m.slot === me);
   $('ready').textContent = mine?.ready ? 'Annulla' : 'Pronto!';
 }
@@ -53,6 +62,8 @@ $('create').onclick = () => start(() => net.send({ k: 'create', game: GAME, isPr
 $('join').onclick = () => start(() => net.send({ k: 'join', code: ($<HTMLInputElement>('code').value || '').toUpperCase() }));
 $('ready').onclick = () => {
   if (isTouch) { document.documentElement.requestFullscreen?.().catch(() => {}); (navigator as any).wakeLock?.request('screen').catch(() => {}); (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } const mine = room?.members.find((m) => m.slot === me); net.send({ k: 'ready', ready: !mine?.ready }); };
+const sendCfg = () => net.send({ k: 'config', map: $<HTMLSelectElement>('selMap').value, mode: $<HTMLSelectElement>('selMode').value });
+$('selMap').onchange = sendCfg; $('selMode').onchange = sendCfg;
 $('leave').onclick = () => { net.send({ k: 'leave' }); $('results').style.display = 'none'; };
 
 let connected = false, lastName = '', lastUrl = '', reconnecting = false;
@@ -86,12 +97,12 @@ function onMsg(m: ServerMsg) {
     case 'left': room = null; predictor = null; renderRoom(); break;
     case 'error': err(`${m.code}: ${m.msg}`); break;
     case 'round': {
-      const course = courseForRound(m.seed, m.round);
+      const course = buildMap(m.map, m.seed, m.difficulty); mapName = MAPS[m.map]?.name ?? m.map; modeName = MODES[m.mode]?.name ?? m.mode;
       stage.buildCourse(course);
       predictor = new Predictor(course, me);
       snaps = []; participants = m.participants;
       $('results').style.display = 'none';
-      toast(`ROUND ${m.round + 1} — passano ${m.qualify}`, 2500);
+      toast(`${mapName.toUpperCase()} · ROUND ${m.round + 1}${MODES[m.mode]?.kind === 'elimination' ? ' — passano ' + m.qualify : ''}`, 3000);
       break;
     }
     case 'snap': {
@@ -103,7 +114,7 @@ function onMsg(m: ServerMsg) {
       predictor?.reconcile(m);
       for (const e of m.ev) {
         if (e.t === 'pickup' && e.slot === me) toast(`${ICON[e.item]} ${e.item.toUpperCase()}!`);
-        if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : '💫 COLPITO!');
+        if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : e.kind === 'obstacle' ? '🔨 OSTACOLO!' : '💫 COLPITO!');
         if (e.t === 'finish' && e.slot === me) toast(`🏁 TRAGUARDO #${e.rank}`, 2500);
         if (e.t === 'fall' && e.slot === me) toast('Caduto!');
       }
@@ -114,7 +125,8 @@ function onMsg(m: ServerMsg) {
     case 'matchEnd': {
       const names = new Map(room?.members.map((x) => [x.slot, x.name]));
       $('results').style.display = ''; $('lobby').style.display = '';
-      $('results').innerHTML = '<h3>Classifica</h3>' + m.standings.map((s, i) => `<div>${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}</div>`).join('');
+      const gp = m.points.some((p) => p > 0);
+      $('results').innerHTML = `<h3>Classifica · ${esc(modeName)}</h3>` + m.standings.map((s, i) => `<div>${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}${gp ? ` — ${m.points[s]} pt` : ''}</div>`).join('');
       break;
     }
   }
@@ -122,7 +134,7 @@ function onMsg(m: ServerMsg) {
 
 // ------------------------------------------------------------------ main loop
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
-(window as any).__cv = { stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; } };
+(window as any).__cv = { freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
 const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3(), tmpV = new THREE.Vector3();
 const seekerMeshes = new Map<number, THREE.Object3D>(), hazardMeshes = new Map<number, THREE.Object3D>();
@@ -162,7 +174,9 @@ function render(dt: number, now: number) {
   stage.adaptQuality(fps || 60, dt);
   const br = pickBracket(now - interpDelay);
   const latest = snaps[snaps.length - 1]?.s;
-  stage.syncPlatforms(predictor?.running ? predictor.tick : (latest?.tick ?? 0));
+  const dynTick = predictor?.running ? predictor.tick : (latest?.tick ?? 0);
+  stage.syncPlatforms(dynTick);
+  stage.syncDynamic(dynTick, dt, camLook);
   if (br && latest) {
     for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) {
       const a = br.a.s.players[s], b = br.b.s.players[s];
@@ -173,6 +187,7 @@ function render(dt: number, now: number) {
         pos = { x: p.x + sm.x, y: p.y + sm.y, z: p.z + sm.z };
       }
       robots[s].update(dt, ps, pos, stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
+      stage.blob(s, pos.x, pos.y, pos.z, ps.al === 1 && ps.rs <= 0, dynTick);
     }
     stage.animate(dt, latest.bx);
     syncProjectiles(br);
@@ -207,7 +222,7 @@ function hud(s: Snapshot) {
   const order = s.players.filter((p) => p.al === 1).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z));
   const rank = order.findIndex((p) => p.s === me) + 1;
   $('hrank').textContent = rank ? `#${rank} / ${order.length}` : 'ESPULSO';
-  $('hinfo').innerHTML = `Round ${s.round + 1}<br/>${s.mp === 'intermission' ? 'Prossimo round' : 'Tempo'} ${Math.max(0, s.left).toFixed(0)}s`;
+  $('hinfo').innerHTML = `${esc(mapName)} · ${esc(modeName)}<br/>Round ${s.round + 1}<br/>${s.mp === 'intermission' ? 'Prossimo round' : 'Tempo'} ${Math.max(0, s.left).toFixed(0)}s`;
   const mine = predictor && s.players[me] ? s.players[me].it : null;
   $('hitem').textContent = mine ? ICON[mine] : '';
   $('bItem').textContent = mine ? ICON[mine] : '🎁'; $('bItem').style.opacity = mine ? '1' : '.45';
@@ -215,6 +230,7 @@ function hud(s: Snapshot) {
 }
 
 function follow(dt: number, s: Snapshot) {
+  if ((window as any).__cv?.freeCam) return; // debug: lets tests/QA inspect any part of the map
   let tgt = predictor && s.players[me]?.al ? { x: predictor.state.x, y: predictor.state.y, z: predictor.state.z } : null;
   if (!tgt) { // spectate the front-runner
     const lead = s.players.filter((p) => p.al === 1).sort((a, b) => b.z - a.z)[0];
@@ -228,11 +244,11 @@ function follow(dt: number, s: Snapshot) {
 }
 
 // idle backdrop for the lobby: slow orbit over a demo course until a round starts
-stage.buildCourse(courseForRound(1234, 0));
+stage.buildCourse(buildMap('titan-gauntlet', 11, 0.5));
 function lobbySpin(t: number) {
   if (predictor) return;
-  stage.camera.position.set(Math.sin(t / 6000) * 16, 7, -14 + Math.cos(t / 6000) * 4);
-  stage.camera.lookAt(0, 1, 12); stage.syncPlatforms(Math.floor(t / 16.6));
+  stage.camera.position.set(Math.sin(t / 7000) * 22, 9, -20 + Math.cos(t / 7000) * 5);
+  stage.camera.lookAt(0, 2, 30); const tk = Math.floor(t / 16.6); stage.syncPlatforms(tk); stage.syncDynamic(tk, 0.016, { x: 0, y: 2, z: 20 });
 }
 renderRoom();
 requestAnimationFrame(frame);

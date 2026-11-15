@@ -21,6 +21,7 @@
     #members { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:6px; }
     #members li { display:flex; justify-content:space-between; padding:8px 12px; border-radius:10px; background:rgba(255,255,255,.05); }
     #members .ready { color:#7cff3a; text-shadow:0 0 8px #7cff3a; } .muted { opacity:.6; font-size:13px; }
+    select { font:inherit; border-radius:12px; border:1px solid rgba(0,229,255,.5); background:rgba(0,229,255,.1); color:inherit; padding:9px 10px; } select option { color:#111; } select:disabled { opacity:.75; }
     #err { color:#ff6b6b; min-height:1.2em; font-size:13px; margin-top:8px; }
     #hud { inset:0; position:fixed; pointer-events:none; display:none; }
     #hud .tl { position:absolute; left:18px; top:14px; font-size:22px; font-weight:800; text-shadow:0 0 12px var(--neon); }
@@ -62,6 +63,8 @@
     </div>
     <div id="room" style="display:none">
       <div class="muted">Stanza <b id="rcode"></b> · <span id="rcount"></span>/7 · <span id="rphase"></span></div>
+      <div class="row" id="opts"><select id="selMap"></select><select id="selMode"></select></div>
+      <div class="muted" id="optDesc" style="margin-top:6px"></div>
       <ul id="members"></ul>
       <div class="row"><button id="ready">Pronto!</button><button id="leave">Esci</button></div>
     </div>

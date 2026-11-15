@@ -42,7 +42,10 @@ export interface PlayerState {
   alive: boolean; // false: eliminated / left (not simulated)
 }
 
-export type PlatformKind = 'static' | 'mover' | 'piston';
+export type PlatformKind = 'static' | 'mover' | 'piston' | 'blink';
+/** Walking surface. Pure functions of the platform => identical on server and client prediction. */
+export type Surface = 'normal' | 'ice' | 'conveyor' | 'bounce' | 'slime';
+export type Theme = 'neon' | 'sunny' | 'frost';
 export interface Platform {
   id: number;
   kind: PlatformKind;
@@ -52,6 +55,29 @@ export interface Platform {
   period: number; phase: number;
   /** cosmetic palette index for the neon trim */
   hue: number;
+  surface?: Surface;       // default 'normal'
+  flowX?: number; flowZ?: number; // conveyor belt speed (u/s)
+  duty?: number;           // 'blink' tiles: fraction of the period they are solid
+  skin?: number;           // cosmetic material variant (theme decides what it means)
+}
+
+export type HazardKind = 'spinner' | 'pendulum' | 'roller';
+/** Giant moving obstacles. Position is a pure function of the tick (see hazards.ts). */
+export interface CourseHazard {
+  id: number; kind: HazardKind;
+  x: number; y: number; z: number;   // spinner: hub centre · pendulum: pivot · roller: start centre
+  len: number;                        // spinner: full bar length · pendulum: rope length · roller: travel distance (-z)
+  radius: number;                     // bar thickness / head radius / roller radius
+  halfWidth?: number;                 // roller: half length of the cylinder (x extent)
+  speed: number;                      // spinner: rad/s · pendulum: max swing angle (rad)
+  period: number; phase: number;      // pendulum / roller cycle
+  dir: number;                        // spinner direction (+1/-1)
+  axis?: 'x' | 'z';                   // pendulum swing plane
+}
+export interface WindZone {
+  x: number; y: number; z: number; hx: number; hy: number; hz: number;
+  fx: number; fz: number;            // acceleration (u/s^2) while active
+  period: number; duty: number; phase: number; // period 0 => always on
 }
 export interface Checkpoint { z: number; spawn: [number, number, number]; }
 export interface ItemBoxDef { id: number; x: number; y: number; z: number; }
@@ -64,6 +90,10 @@ export interface Course {
   killY: number;
   spawnPoints: [number, number, number][]; // 7 slots
   length: number;
+  mapId: string;
+  theme: Theme;
+  hazards: CourseHazard[];
+  zones: WindZone[];
 }
 
 export interface SeekerState { id: number; owner: number; target: number; x: number; y: number; z: number; vx: number; vy: number; vz: number; life: number; }

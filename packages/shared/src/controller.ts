@@ -13,7 +13,7 @@ export interface Body { x: number; y: number; z: number; vx: number; vy: number;
 const _boxes: Box[] = [];
 export function boxesAt(course: Course, tick: number): Box[] {
   const ps = course.platforms;
-  while (_boxes.length < ps.length) _boxes.push({ minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0, id: 0, kind: 'static' });
+  while (_boxes.length < ps.length) _boxes.push({ minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0, id: 0, kind: 'static', active: true });
   for (let i = 0; i < ps.length; i++) platformBox(ps[i], tick, _boxes[i]);
   return _boxes;
 }
@@ -35,7 +35,7 @@ export function moveBody(b: Body, hw: number, h: number, course: Course, tick: n
   // X
   b.x += b.vx * DT;
   for (const o of boxes) {
-    if (Math.abs(o.minz + o.maxz - 2 * b.z) > (o.maxz - o.minz) + zNear) continue;
+    if (!o.active || Math.abs(o.minz + o.maxz - 2 * b.z) > (o.maxz - o.minz) + zNear) continue;
     if (b.y < o.maxy - EPS && b.y + h > o.miny + EPS && b.z + hw > o.minz && b.z - hw < o.maxz && b.x + hw > o.minx && b.x - hw < o.maxx) {
       // step-up lip forgiveness so players don't snag on seams
       if (o.maxy - b.y < 0.18 && b.vy <= 0) { b.y = o.maxy; continue; }
@@ -46,7 +46,7 @@ export function moveBody(b: Body, hw: number, h: number, course: Course, tick: n
   // Z
   b.z += b.vz * DT;
   for (const o of boxes) {
-    if (Math.abs(o.minz + o.maxz - 2 * b.z) > (o.maxz - o.minz) + zNear) continue;
+    if (!o.active || Math.abs(o.minz + o.maxz - 2 * b.z) > (o.maxz - o.minz) + zNear) continue;
     if (b.y < o.maxy - EPS && b.y + h > o.miny + EPS && b.x + hw > o.minx && b.x - hw < o.maxx && b.z + hw > o.minz && b.z - hw < o.maxz) {
       if (o.maxy - b.y < 0.18 && b.vy <= 0) { b.y = o.maxy; continue; }
       if (b.vz > 0 || (b.vz === 0 && b.z < (o.minz + o.maxz) / 2)) b.z = o.minz - hw; else b.z = o.maxz + hw;
@@ -57,7 +57,7 @@ export function moveBody(b: Body, hw: number, h: number, course: Course, tick: n
   b.y += b.vy * DT;
   let grounded = false, platformId = -1;
   for (const o of boxes) {
-    if (b.x + hw > o.minx && b.x - hw < o.maxx && b.z + hw > o.minz && b.z - hw < o.maxz && b.y < o.maxy && b.y + h > o.miny) {
+    if (o.active && b.x + hw > o.minx && b.x - hw < o.maxx && b.z + hw > o.minz && b.z - hw < o.maxz && b.y < o.maxy && b.y + h > o.miny) {
       if (b.vy <= 0 && b.y > o.maxy - 0.6) { b.y = o.maxy; b.vy = 0; grounded = true; platformId = o.id; }
       else if (b.vy > 0) { b.y = o.miny - h; b.vy = 0; }
     }
@@ -110,8 +110,11 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   const stunned = p.stun > 0;
   const mx = stunned ? 0 : inp.mx, mz = stunned ? 0 : inp.mz;
   const wantsMove = mx !== 0 || mz !== 0;
-  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1);
-  const accel = p.grounded ? (wantsMove ? T.accelGround : T.frictionGround) : T.accelAir;
+  const under = p.grounded && p.platformId >= 0 ? course.platforms[p.platformId] : undefined;
+  const surf = under?.surface ?? 'normal';
+  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1) * (surf === 'slime' ? T.slimeSpeedMul : 1);
+  let accel = p.grounded ? (wantsMove ? T.accelGround : T.frictionGround) : T.accelAir;
+  if (surf === 'ice') accel *= wantsMove ? T.iceAccelMul : T.iceFrictionMul; // slippery: slow to start, slow to stop
   const steer = p.diving > 0 ? 0.15 : 1; // committed dive = limited steering
   if (p.diving <= 0 || wantsMove) {
     p.vx = approach(p.vx, mx * speed, accel * steer * DT);
@@ -125,7 +128,7 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   if (jumpEdge && !stunned) p.jumpBuf = T.jumpBuffer;
   if (!inp.jump) p.hovering = false;
   if (!stunned && p.jumpBuf > 0 && (p.grounded || p.coyote > 0)) {
-    p.vy = T.jumpVelocity; p.grounded = false; p.coyote = 0; p.jumpBuf = 0; p.platformId = -1;
+    p.vy = T.jumpVelocity * (surf === 'slime' ? T.slimeJumpMul : 1); p.grounded = false; p.coyote = 0; p.jumpBuf = 0; p.platformId = -1;
   } else if (jumpEdge && !stunned && !p.grounded && p.hoverFuel > 0 && p.vy < T.hoverMaxRise) {
     p.hovering = true; // thruster hop (hold to burn fuel)
   }
@@ -153,10 +156,17 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   const hs = Math.hypot(p.vx, p.vz);
   if (hs > T.maxHorizontalSpeed) { const k = T.maxHorizontalSpeed / hs; p.vx *= k; p.vz *= k; }
 
+  // ---- environment: conveyor belts carry you, wind zones push you ----
+  if (surf === 'conveyor' && under) { p.x += (under.flowX ?? 0) * DT; p.z += (under.flowZ ?? 0) * DT; }
+  if (course.zones.length) applyWind(p, course, tick);
+
   // ---- collide ----
   const wasGrounded = p.grounded;
   const res = moveBody(p, BODY_HALF_W, BODY_HEIGHT, course, tick, p.platformId);
   p.grounded = res.grounded; p.platformId = res.platformId;
+  if (p.grounded && course.platforms[p.platformId]?.surface === 'bounce') { // trampoline: launched on contact
+    p.vy = T.bounceVelocity; p.grounded = false; p.platformId = -1; p.coyote = 0; p.hovering = false;
+  }
   if (p.grounded) { p.coyote = T.coyoteTime; p.hoverFuel = T.hoverFuel; p.hovering = false; }
   else if (wasGrounded && p.vy <= 0) p.coyote = T.coyoteTime;
 
@@ -166,6 +176,31 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
     while (p.checkpoint + 1 < cps.length && p.z > cps[p.checkpoint + 1].z) p.checkpoint++;
   }
   if (p.y < course.killY) { p.respawn = T.respawnDelay; p.vx = p.vy = p.vz = 0; p.boost = 0; p.stun = 0; p.diving = 0; }
+}
+
+function windActive(z: Course['zones'][number], tick: number) {
+  if (z.period <= 0) return true;
+  return ((((tick * DT) / z.period + z.phase) % 1) + 1) % 1 < z.duty;
+}
+function applyWind(p: PlayerState, course: Course, tick: number) {
+  const cy = p.y + 0.55;
+  for (const z of course.zones) {
+    if (Math.abs(p.x - z.x) > z.hx || Math.abs(p.z - z.z) > z.hz || Math.abs(cy - z.y) > z.hy) continue;
+    if (!windActive(z, tick)) continue;
+    // Ground friction / air control would cancel a plain force, so wind is a drift (like a belt): fx*0.3 u/s.
+    p.x += z.fx * 0.3 * DT; p.z += z.fz * 0.3 * DT;
+  }
+}
+export { windActive };
+
+/** Height of the highest solid surface below (x, y, z) — used for blob shadows. null = void. */
+export function groundBelow(course: Course, tick: number, x: number, y: number, z: number): number | null {
+  let best: number | null = null;
+  for (const o of boxesAt(course, tick)) {
+    if (!o.active || x < o.minx || x > o.maxx || z < o.minz || z > o.maxz || o.maxy > y + 0.4) continue;
+    if (best === null || o.maxy > best) best = o.maxy;
+  }
+  return best;
 }
 
 export const clampMove = (v: number) => clamp(v, -1, 1);

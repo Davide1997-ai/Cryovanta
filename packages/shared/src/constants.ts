@@ -38,4 +38,9 @@ export const TUNING = {
   respawnDelay: 1.4,
   bumpRadius: 0.85,
   bumpImpulse: 6,
+  bounceVelocity: 19,
+  slimeSpeedMul: 0.55,
+  slimeJumpMul: 0.8,
+  iceAccelMul: 0.15,
+  iceFrictionMul: 0.06,
 } as const;

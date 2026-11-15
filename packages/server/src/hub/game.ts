@@ -1,5 +1,7 @@
 import { MAX_PLAYERS_PER_ROOM, type InputFrame, type ServerMsg } from '@cryovanta/shared';
 
+export interface RoomOptions { map: string; mode: string; }
+
 /** What a running game can ask of the room that hosts it. */
 export interface GameHost {
   send(slot: number, msg: ServerMsg): void;
@@ -8,7 +10,7 @@ export interface GameHost {
 
 export interface GameSession {
   readonly finished: boolean;
-  start(slots: number[]): void;
+  start(slots: number[], options: RoomOptions): void;
   handleInput(slot: number, frames: InputFrame[]): void;
   /** Called at TICK_RATE while the room is in the `playing` phase. */
   tick(): void;
@@ -22,6 +24,8 @@ export interface GameModule {
   displayName: string;
   minPlayers: number;
   maxPlayers: number;
+  /** Allowed values for the host-selectable options; first entry of each is the default. */
+  options: { map: string[]; mode: string[] };
   createSession(host: GameHost): GameSession;
 }
 

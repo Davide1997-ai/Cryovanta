@@ -122,7 +122,7 @@ describe('race sim', () => {
     expect([qualifyFor(7), qualifyFor(4), qualifyFor(2), qualifyFor(1)]).toEqual([4, 2, 1, 1]);
   });
   it('seeker homes on the racer ahead and knocks them down', () => {
-    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1 });
+    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1, mapId: 'neon-circuit', difficulty: 0, boxRespawn: 4 });
     sim.phase = 'running';
     const [lead, chaser] = [sim.players[0], sim.players[1]];
     lead.z = 20; lead.y = 0; lead.x = 0; chaser.z = 10; chaser.x = 0; chaser.y = 0; chaser.item = 'seeker'; chaser.yaw = 0;
@@ -141,7 +141,7 @@ describe('race sim', () => {
     expect(sim.seekers).toHaveLength(0);
   });
   it('hazard drop lands on the track, arms, then trips a follower (not the owner right away)', () => {
-    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1 });
+    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1, mapId: 'neon-circuit', difficulty: 0, boxRespawn: 4 });
     sim.phase = 'running';
     const [a, b] = [sim.players[0], sim.players[1]];
     a.x = 0; a.z = 0; a.yaw = 0; a.item = 'hazard'; b.x = 0; b.z = -6;
@@ -155,7 +155,7 @@ describe('race sim', () => {
     expect(tripped).toBe(1);
   });
   it('item cap: cannot spam more than 2 live seekers', () => {
-    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1 });
+    const sim = new RaceSim({ seed: 5, round: 0, participants: [0, 1], qualify: 1, mapId: 'neon-circuit', difficulty: 0, boxRespawn: 4 });
     sim.phase = 'running';
     const a = sim.players[0];
     for (let i = 0; i < 5; i++) { a.item = 'seeker'; a.useHeld = false; sim.step([inp({ use: true })]); }
@@ -166,7 +166,7 @@ describe('race sim', () => {
 describe('course reachability (bot must finish every round difficulty)', () => {
   for (const round of [0, 1, 2]) {
     it(`bot completes round ${round}`, () => {
-      const sim = new RaceSim({ seed: 99 + round, round, participants: [0], qualify: 1 });
+      const sim = new RaceSim({ seed: 99 + round, round, participants: [0], qualify: 1, mapId: 'neon-circuit', difficulty: Math.min(1, round * 0.35), boxRespawn: 4 });
       let seq = 0;
       for (let t = 0; t < TICK_RATE * 240 && sim.phase !== 'ended'; t++) {
         const p = sim.players[0];
@@ -181,7 +181,7 @@ describe('course generator regression sweep', () => {
   it('a naive bot (no short hops) still clears >= 70% of random seeds on rounds 0 and 2', () => {
     let ok = 0, total = 0;
     for (let seed = 1; seed <= 40; seed++) for (const round of [0, 2]) {
-      const sim = new RaceSim({ seed: seed * 31, round, participants: [0], qualify: 1 });
+      const sim = new RaceSim({ seed: seed * 31, round, participants: [0], qualify: 1, mapId: 'neon-circuit', difficulty: Math.min(1, round * 0.35), boxRespawn: 4 });
       let seq = 0;
       for (let t = 0; t < TICK_RATE * 200 && sim.phase !== 'ended'; t++) sim.step([botInput(sim.players[0], sim.course, sim.tick, ++seq)]);
       total++; if (sim.players[0].finishRank > 0) ok++;

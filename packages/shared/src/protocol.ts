@@ -16,6 +16,8 @@ export interface LobbyMember { slot: number; name: string; ready: boolean; host:
 export interface RoomInfo {
   code: string; game: string; phase: RoomPhase; isPrivate: boolean;
   capacity: number; members: LobbyMember[]; countdown: number; // seconds, 0 if none
+  /** host-selectable options (map id or 'random', mode id) */
+  options: { map: string; mode: string };
 }
 export type ErrorCode = 'ROOM_FULL' | 'ROOM_NOT_FOUND' | 'ROOM_IN_PROGRESS' | 'BAD_REQUEST' | 'NOT_IN_ROOM' | 'RATE_LIMITED' | 'BAD_VERSION' | 'UNKNOWN_GAME' | 'NOT_HOST';
 
@@ -26,6 +28,7 @@ export type ClientMsg =
   | { k: 'create'; game: string; isPrivate: boolean }
   | { k: 'join'; code: string }
   | { k: 'ready'; ready: boolean }
+  | { k: 'config'; map: string; mode: string }
   | { k: 'leave' }
   | { k: 'input'; frames: InputFrame[] }
   | { k: 'ping'; t: number };
@@ -50,9 +53,9 @@ export interface Snapshot {
   hz: { id: number; x: number; y: number; z: number; o: number; a: 0 | 1 }[];
   ev: SimEvent[];
 }
-export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; }
+export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; map: string; mode: string; difficulty: number; }
 export interface RoundEnd { k: 'roundEnd'; qualified: number[]; eliminated: number[]; }
-export interface MatchEnd { k: 'matchEnd'; standings: number[]; winner: number; }
+export interface MatchEnd { k: 'matchEnd'; standings: number[]; winner: number; points: number[]; }
 
 export type ServerMsg =
   | { k: 'welcome'; v: number; token: string; serverTime: number }
@@ -93,6 +96,7 @@ export function parseClientMsg(text: string): ClientMsg | null {
     case 'create': return typeof m.game === 'string' && m.game.length <= 32 ? { k: 'create', game: m.game, isPrivate: m.isPrivate === true } : null;
     case 'join': return typeof m.code === 'string' && /^[A-Z0-9]{4,6}$/.test(m.code.toUpperCase()) ? { k: 'join', code: m.code.toUpperCase() } : null;
     case 'ready': return { k: 'ready', ready: m.ready === true };
+    case 'config': return typeof m.map === 'string' && typeof m.mode === 'string' && m.map.length <= 32 && m.mode.length <= 32 ? { k: 'config', map: m.map, mode: m.mode } : null;
     case 'leave': return { k: 'leave' };
     case 'input': { const frames = parseInputFrames(m.frames); return frames ? { k: 'input', frames } : null; }
     case 'ping': { const t = num(m.t); return t === null ? null : { k: 'ping', t }; }

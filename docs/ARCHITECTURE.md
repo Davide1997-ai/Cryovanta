@@ -81,6 +81,22 @@ Le casse si ricaricano in 4 s. L'estrazione è **pesata sulla posizione** (rubbe
 
 Spinte tra robot (`contacts`): separazione morbida + impulso proporzionale alla sovrapposizione, senza stun.
 
+## 4b. Mappe, superfici e ostacoli giganti
+
+Tutto ciò che si muove è una **funzione pura del tick** (nessuno stato da sincronizzare): server e client calcolano le stesse pose.
+
+* **Superfici** (`Platform.surface`, applicate in `stepPlayer`, quindi predette): `ice` (accelerazione ×0.15, attrito ×0.06), `conveyor`
+  (trascina a `flowX/flowZ` u/s), `bounce` (lancia a 19 u/s), `slime` (velocità ×0.55, salto ×0.8).
+* **Tessere** `blink`: solide solo per `duty` di ogni ciclo (trabocchetti); lampeggiano in rosso nell'ultimo 20% prima di sparire.
+* **Vento** (`WindZone`): deriva costante a `0.3·f` u/s mentre la zona è attiva (la semplice forza verrebbe annullata dall'attrito/controllo aereo).
+* **Ostacoli** (`CourseHazard`, `hazards.ts`): `spinner` (barra rotante, si può saltare), `pendulum` (martello a pendolo), `roller`
+  (cilindro gigante che rotola verso -z). Il contatto è deciso dal server (`RaceSim.obstacles`) e passa dalla stessa tabella degli impatti
+  (`kind: 'obstacle'`: push 12, stun 0.9 s, i-frame 1.3 s; lo scudo li para).
+* **Registro mappe** (`maps.ts`): `MapDef { id, name, theme, build(seed, difficulty) }`. Titan e Frost usano lo stesso costruttore
+  (`buildPark`) con *pool di segmenti* diversi; il percorso è generato da seed, quindi viaggia in rete solo `(map, seed, difficulty)`.
+  I test verificano per ogni mappa/difficoltà: struttura valida, determinismo, spawn/casse/checkpoint su una piattaforma, **nessun vuoto > 5.6 u**.
+* **Modalità** (`modes.ts` + `Match`): dati + interpretazione di `kind`. L'host sceglie mappa e modalità (`config`, solo host, resetta i "pronto").
+
 ## 5. Formato di gara
 
 Eliminazione: ogni round passano i primi `ceil(n/2)` (7 → 4 → 2 → 1). Il round finisce quando la quota è piena, tutti sono
@@ -103,6 +119,15 @@ Difficoltà e lunghezza crescono col round. Partenza con countdown di 3 s; 5 s d
   liberato e il giocatore rimosso dal match.
 * Operatività: `maxRooms`/`maxClients` configurabili, `/healthz`, un solo processo = un solo loop (scala orizzontalmente per
   stanza: lo stato di una stanza non è condiviso, basta un router davanti).
+
+## 7a. Grafica "quasi fotorealistica": cosa c'è e cosa no
+
+Titan/Frost usano: cielo fisico (`Sky`, stesso cielo come luce ambientale per riflessi coerenti), **texture procedurali tileable** (cemento, legno,
+erba, metallo, ghiaccio con crepe, melma, nastro, trampolino) con bump map, materiali fisici con clearcoat, **ombre morbide** (desktop), mare con normal map animata,
+nebbia atmosferica, nuvole, isole e palloni di scenario, ombre di contatto sui robot (anche su telefono). Su telefono: niente ombre/clearcoat, risoluzione dinamica e culling per distanza.
+
+È un look curato e coerente, **non** fotorealismo vero: quello richiede asset autoriali (set PBR scansionati, HDRI, modelli scolpiti). Gli slot sono pronti:
+`textures.ts` (`surfaceTexture`) e `Stage.makeSky` si sostituiscono con file reali senza toccare gioco o rete.
 
 ## 7. Direzione artistica
 

@@ -92,6 +92,7 @@ describe('authoritative match over the wire', () => {
     bots[0].send({ k: 'create', game: GAME, isPrivate: true }); w.run(8); // latency: wait for the room reply
     for (const b of bots.slice(1)) b.send({ k: 'join', code: bots[0].room!.code });
     w.run(8);
+    bots[0].send({ k: 'config', map: 'neon-circuit', mode: 'elimination' });
     bots.forEach((b) => b.send({ k: 'ready', ready: true }));
     w.run(60 * 60 * 15, () => bots.every((b) => b.matchEnd));
     for (const b of bots) {
@@ -206,5 +207,24 @@ describe('server-side validation & anti-cheat', () => {
     let maxY = p().y; for (let i = 0; i < 30; i++) { w.step(); maxY = Math.max(maxY, p().y); } // half a second of real time
     expect(p().z - z0, 'no faster than 1 input per tick').toBeLessThan(9 * 0.5 * 1.7 + 1);
     expect(maxY, 'jump executed').toBeGreaterThan(0.3);
+  });
+});
+
+describe('room options (map + mode)', () => {
+  const room2 = () => { const a = w.connect('host'), b = w.connect('guest'); a.send({ k: 'create', game: GAME, isPrivate: true }); b.send({ k: 'join', code: a.room!.code }); return [a, b]; };
+  it('only the host can change map/mode; invalid values are rejected; a change clears ready flags', () => {
+    const [a, b] = room2();
+    b.send({ k: 'config', map: 'titan-gauntlet', mode: 'race' }); expect(b.errors).toEqual(['NOT_HOST']);
+    a.send({ k: 'config', map: 'nope', mode: 'race' }); expect(a.errors).toEqual(['BAD_REQUEST']);
+    a.send({ k: 'ready', ready: true }); b.send({ k: 'ready', ready: true }); expect(a.room!.phase).toBe('countdown');
+    a.send({ k: 'config', map: 'titan-gauntlet', mode: 'grandprix' });
+    expect(a.room!.phase).toBe('lobby'); expect(a.room!.options).toEqual({ map: 'titan-gauntlet', mode: 'grandprix' });
+    expect(a.room!.members.every((m) => !m.ready)).toBe(true);
+  });
+  it('the chosen map/mode reach the clients in the round message', () => {
+    const [a, b] = room2();
+    a.send({ k: 'config', map: 'frost-run', mode: 'race' });
+    [a, b].forEach((x) => x.send({ k: 'ready', ready: true })); w.run(300, () => a.roundsSeen > 0);
+    const r = a.log.find((m) => m.k === 'round'); expect(r && r.k === 'round' && [r.map, r.mode]).toEqual(['frost-run', 'race']);
   });
 });

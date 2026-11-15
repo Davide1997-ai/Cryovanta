@@ -4,7 +4,7 @@
  */
 import type { PlayerState } from './types';
 
-export type ImpactKind = 'seeker' | 'hazard' | 'dive';
+export type ImpactKind = 'seeker' | 'hazard' | 'dive' | 'obstacle';
 export interface ImpactSource { kind: ImpactKind; owner: number; x: number; y: number; z: number; vx: number; vz: number; }
 /** hit: knocked/stunned · blocked: shield ate it · smashed: boosting robot shattered the hazard · ignored: no contact effect */
 export type ImpactOutcome = 'hit' | 'blocked' | 'smashed' | 'ignored';
@@ -14,6 +14,7 @@ const PROFILE = {
   seeker: { push: 10, up: 7.5, stun: 1.4, invuln: 1.8 },
   hazard: { push: 7, up: 9, stun: 1.0, invuln: 1.5 },
   dive: { push: 12, up: 4.5, stun: 0.6, invuln: 0.8 },
+  obstacle: { push: 12, up: 7, stun: 0.9, invuln: 1.3 }, // giant course hazards: spinners, hammers, rollers
 } as const;
 
 export function resolveImpact(src: ImpactSource, t: PlayerState): ImpactResult {
@@ -24,7 +25,7 @@ export function resolveImpact(src: ImpactSource, t: PlayerState): ImpactResult {
   const prof = PROFILE[src.kind];
   // direction: along projectile travel if it has velocity, else from source to victim
   let dx = t.x - src.x, dz = t.z - src.z;
-  if ((src.kind === 'seeker' || src.kind === 'dive') && (src.vx !== 0 || src.vz !== 0)) { dx = src.vx; dz = src.vz; }
+  if ((src.kind === 'seeker' || src.kind === 'dive' || src.kind === 'obstacle') && (src.vx !== 0 || src.vz !== 0)) { dx = src.vx; dz = src.vz; }
   const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
 
   // 3) i-frames: projectile/hazard passes through

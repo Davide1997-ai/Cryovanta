@@ -5,38 +5,54 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { platformCenter, type Course } from '@cryovanta/shared';
+import { Sky } from 'three/examples/jsm/objects/Sky.js';
+import { blinkPhase, groundBelow, hazardPose, platformCenter, windActive, type Course, type CourseHazard, type Platform, type Theme } from '@cryovanta/shared';
+import { cloudTexture, scaleBoxUV, surfaceTexture, waterNormal, windTexture, type TexKind } from './textures';
 
 export const NEON = [0x00e5ff, 0xff3df2, 0x7cff3a, 0xffb020, 0x8a6bff, 0xff4d4d];
 
-/** Sci-fi stage: floating metal slabs with neon trim, starfield sky, bloom. Pure view: owns no game state. */
+/**
+ * Stage: owns the three.js scene. Themes: 'neon' (sci-fi space), 'sunny' (giant daylight obstacle park, PBR textures,
+ * physical sky, soft shadows, water) and 'frost' (snowy variant). Pure view: owns no game state.
+ */
 export class Stage {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(62, 1, 0.1, 600);
   composer: EffectComposer;
+  private bloom: UnrealBloomPass;
   private courseGroup = new THREE.Group();
+  private envGroup = new THREE.Group();
   private platMeshes: { mesh: THREE.Object3D; id: number }[] = [];
   boxMeshes: THREE.Object3D[] = [];
   private course: Course | null = null;
   private time = 0;
-  /** phones/tablets: no post-processing, lower pixel ratio (battery + 7-player load) */
+  private theme: Theme | null = null;
+  private pmrem: THREE.PMREMGenerator;
+  private sun: THREE.DirectionalLight | null = null;
+  private water: THREE.Mesh | null = null; private waterTex: THREE.Texture | null = null;
+  private snow: THREE.Points | null = null;
+  private blinkMeshes: { p: Platform; mesh: THREE.Mesh; ghost: THREE.LineSegments; mat: THREE.MeshStandardMaterial }[] = [];
+  private belts: { tex: THREE.Texture; fx: number; fz: number }[] = [];
+  private hazardObjs: { h: CourseHazard; obj: THREE.Object3D; rope?: THREE.Mesh }[] = [];
+  private zoneObjs: { z: Course['zones'][number]; mesh: THREE.Mesh; tex: THREE.Texture }[] = [];
+  private blobs: THREE.Mesh[] = [];
+  /** distance culling along the track (the park maps are ~650 units long) */
+  private cullables: { obj: THREE.Object3D; z: number; r: number }[] = [];
+  /** phones/tablets: no post-processing/shadows, lower pixel ratio (battery + 7-player load) */
   readonly lite = matchMedia('(pointer: coarse)').matches;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.baseDpr = Math.min(devicePixelRatio, this.lite ? 1.5 : 2); this.renderer.setPixelRatio(this.baseDpr);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 0.85;
-    const pm = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; // clean studio reflections => "toy plastic / chrome" look
-    this.scene.environmentIntensity = 0.35;
-    this.scene.fog = new THREE.FogExp2(0x0a0b24, 0.007);
-    this.scene.add(this.sky(), this.stars(), new THREE.HemisphereLight(0x9fb8ff, 0x2a1450, 0.55));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(-20, 40, -10); this.scene.add(sun);
-    this.scene.add(this.courseGroup);
+    if (!this.lite) { this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.add(this.envGroup, this.courseGroup);
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(512, 512), 0.55, 0.5, 0.92));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), 0.55, 0.5, 0.92);
+    this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.resize(); addEventListener('resize', () => this.resize());
   }
@@ -47,7 +63,67 @@ export class Stage {
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
   }
 
-  private sky() {
+  // ------------------------------------------------------------------ environments
+  setTheme(theme: Theme) {
+    if (this.theme === theme) return;
+    this.theme = theme;
+    this.envGroup.clear(); this.sun = null; this.water = null; this.snow = null;
+    if (theme === 'neon') this.envNeon(); else this.envDay(theme);
+  }
+
+  private envNeon() {
+    this.scene.environment = this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture; // studio reflections => toy plastic / chrome
+    this.scene.environmentIntensity = 0.35; this.renderer.toneMappingExposure = 0.85;
+    this.scene.fog = new THREE.FogExp2(0x0a0b24, 0.007); this.camera.far = 600; this.camera.updateProjectionMatrix();
+    this.bloom.strength = 0.55; this.bloom.threshold = 0.92;
+    const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(-20, 40, -10);
+    this.envGroup.add(this.skyNeon(), this.stars(), new THREE.HemisphereLight(0x9fb8ff, 0x2a1450, 0.55), sun);
+  }
+
+  private makeSky(elev: number, azim: number, turbidity: number, rayleigh: number) {
+    const sky = new Sky(); sky.scale.setScalar(1400);
+    const u = sky.material.uniforms; u.turbidity.value = turbidity; u.rayleigh.value = rayleigh; u.mieCoefficient.value = 0.004; u.mieDirectionalG.value = 0.82;
+    const dir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - elev), THREE.MathUtils.degToRad(azim));
+    u.sunPosition.value.copy(dir); return { sky, dir };
+  }
+
+  /** Daylight: physical sky (also used as the image-based light => reflections match the sky), soft sun shadows, water, clouds. */
+  private envDay(theme: Theme) {
+    const frost = theme === 'frost';
+    const { sky, dir } = this.makeSky(frost ? 22 : 40, 150, frost ? 9 : 3.5, frost ? 2.6 : 1.3);
+    const envScene = new THREE.Scene(); envScene.add(this.makeSky(frost ? 22 : 40, 150, frost ? 9 : 3.5, frost ? 2.6 : 1.3).sky);
+    this.scene.environment = this.pmrem.fromScene(envScene).texture;
+    this.scene.environmentIntensity = frost ? 0.75 : 0.6; this.renderer.toneMappingExposure = frost ? 0.42 : 0.48;
+    this.scene.fog = new THREE.FogExp2(frost ? 0xd5e4ee : 0xa9c6e0, (frost ? 0.0042 : 0.0022) * (this.lite ? 2.2 : 1));
+    this.camera.far = 1800; this.camera.updateProjectionMatrix();
+    this.bloom.strength = 0.22; this.bloom.threshold = 0.96;
+    const sun = new THREE.DirectionalLight(frost ? 0xeaf2ff : 0xfff0d8, frost ? 2.2 : 3.2);
+    sun.position.copy(dir).multiplyScalar(120); this.sun = sun;
+    if (!this.lite) {
+      sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); const c = sun.shadow.camera; c.left = -48; c.right = 48; c.top = 48; c.bottom = -48; c.near = 10; c.far = 320; sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.05;
+    }
+    this.envGroup.add(sky, sun, sun.target, new THREE.HemisphereLight(frost ? 0xdbeaff : 0xbfdcff, frost ? 0x8fa6b8 : 0x6b7a4a, 0.28));
+    // water / sea of jelly far below the course
+    this.waterTex = waterNormal(this.lite ? 128 : 256); this.waterTex.repeat.set(220, 220);
+    const wm = this.lite ? new THREE.MeshStandardMaterial({ color: frost ? 0x9fd3e6 : 0x1f93ad, roughness: 0.15, metalness: 0.05 })
+      : new THREE.MeshPhysicalMaterial({ color: frost ? 0x9fd3e6 : 0x1b8fb0, roughness: 0.06, metalness: 0.0, clearcoat: 0.6, normalMap: this.waterTex, normalScale: new THREE.Vector2(0.55, 0.55), envMapIntensity: 1.3 });
+    this.water = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), wm); this.water.rotation.x = -Math.PI / 2; this.water.receiveShadow = !this.lite;
+    this.envGroup.add(this.water);
+    // clouds
+    const ct = cloudTexture(), r = (i: number) => ((Math.sin(i * 91.3) * 43758.5453) % 1 + 1) % 1;
+    for (let i = 0; i < (this.lite ? 8 : 18); i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ct, transparent: true, opacity: frost ? 0.9 : 0.8, depthWrite: false, fog: false }));
+      s.scale.set(220 + r(i) * 200, 90 + r(i + 5) * 60, 1); s.position.set((r(i + 9) - 0.5) * 900, 140 + r(i + 3) * 90, (r(i + 17)) * 900 - 80); this.envGroup.add(s);
+    }
+    if (frost && !this.lite) { // falling snow
+      const n = 700, pos = new Float32Array(n * 3); for (let i = 0; i < n; i++) pos.set([(r(i) - 0.5) * 60, r(i + 1) * 30, (r(i + 2) - 0.5) * 60], i * 3);
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      this.snow = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 0.12, transparent: true, opacity: 0.85, depthWrite: false }));
+      this.snow.frustumCulled = false; this.envGroup.add(this.snow);
+    }
+  }
+
+  private skyNeon() {
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: { top: { value: new THREE.Color(0x05061a) }, mid: { value: new THREE.Color(0x2a0f5c) }, bot: { value: new THREE.Color(0xff3df2) } },
@@ -63,12 +139,19 @@ export class Stage {
     return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false }));
   }
 
+  // ------------------------------------------------------------------ course construction
+  buildCourse(course: Course) {
+    this.setTheme(course.theme);
+    this.course = course;
+    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = []; this.blinkMeshes = []; this.belts = []; this.hazardObjs = []; this.zoneObjs = []; this.cullables = [];
+    if (course.theme === 'neon') this.buildNeonCourse(course); else this.buildParkCourse(course);
+    if (this.water) this.water.position.y = course.killY + 8;
+  }
+
   private matCache = new Map<string, THREE.Material>();
   private mat(key: string, make: () => THREE.Material) { let m = this.matCache.get(key); if (!m) { m = make(); this.matCache.set(key, m); } return m; }
 
-  buildCourse(course: Course) {
-    this.course = course;
-    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = [];
+  private buildNeonCourse(course: Course) {
     const lite = this.lite;
     // Draw-call budget: one top mesh + one merged trim per platform on phones (was 8 per platform).
     const panel = this.mat('panel', () => new THREE.MeshStandardMaterial({ color: 0x1a2142, metalness: 0.55, roughness: 0.55 }));
@@ -116,15 +199,171 @@ export class Stage {
     }
   }
 
+
+  // ---- giant daylight obstacle park (Titan Gauntlet / Frost Run) ----
+  private parkMat(kind: TexKind, frost: boolean, key = ''): THREE.MeshStandardMaterial {
+    return this.mat('park' + kind + frost + key, () => {
+      const t = surfaceTexture(frost && kind === 'grass' ? 'snow' : kind, this.lite ? 128 : 256);
+      const rough = { concrete: 0.9, wood: 0.7, candy: 0.35, grass: 0.95, metal: 0.4, conveyor: 0.6, bounce: 0.3, ice: 0.12, slime: 0.15, stripes: 0.5, snow: 0.85, stripesRW: 0.4 }[kind];
+      const metal = kind === 'metal' ? 0.8 : 0;
+      const m = this.lite ? new THREE.MeshStandardMaterial({ map: t.map, roughness: rough, metalness: metal })
+        : new THREE.MeshPhysicalMaterial({ map: t.map, bumpMap: t.bump, bumpScale: kind === 'ice' ? 0.2 : 1.2, roughness: rough, metalness: metal, clearcoat: kind === 'ice' || kind === 'slime' || kind === 'bounce' || kind === 'candy' ? 0.8 : 0, clearcoatRoughness: 0.15 });
+      if (frost && kind !== 'ice') m.color.setHex(0xeaf4ff);
+      return m;
+    }) as THREE.MeshStandardMaterial;
+  }
+  private skinKind(p: Platform, frost: boolean): TexKind {
+    if (p.kind === 'piston') return 'stripes';
+    const s = p.surface ?? 'normal';
+    if (s === 'conveyor') return 'conveyor'; if (s === 'bounce') return 'bounce'; if (s === 'ice') return 'ice'; if (s === 'slime') return 'slime';
+    if (p.kind === 'blink') return frost ? 'ice' : 'candy';
+    return (['concrete', 'wood', 'candy', 'grass', 'metal'] as TexKind[])[(p.skin ?? 0) % 5];
+  }
+
+  private buildParkCourse(course: Course) {
+    const frost = course.theme === 'frost', lite = this.lite;
+    const under = this.parkMat('concrete', frost, 'under'); 
+    for (const p of course.platforms) {
+      const g = new THREE.Group();
+      const kind = this.skinKind(p, frost);
+      const geo = new THREE.BoxGeometry(p.hx * 2, p.hy * 2, p.hz * 2); scaleBoxUV(geo, p.hx, p.hy, p.hz, kind === 'conveyor' || kind === 'bounce' ? 6 : 4);
+      let material: THREE.Material = this.parkMat(kind, frost);
+      const mesh = new THREE.Mesh(geo, material);
+      if (kind === 'conveyor') { // each belt animates its own texture offset
+        const base = surfaceTexture('conveyor', lite ? 128 : 256), tex = base.map.clone(); tex.needsUpdate = true; tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        material = (material as THREE.MeshStandardMaterial).clone(); (material as THREE.MeshStandardMaterial).map = tex; mesh.material = material;
+        this.belts.push({ tex, fx: p.flowX ?? 0, fz: p.flowZ ?? 0 });
+      }
+      let ghost: THREE.LineSegments | null = null;
+      if (p.kind === 'blink') {
+        const m = (this.parkMat(kind, frost) as THREE.MeshStandardMaterial).clone(); mesh.material = m;
+        ghost = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 })); ghost.visible = false;
+        this.blinkMeshes.push({ p, mesh, ghost, mat: m });
+      }
+      mesh.castShadow = mesh.receiveShadow = !lite; g.add(mesh); if (ghost) g.add(ghost);
+      if (!lite && p.kind !== 'piston' && p.hy > 0.3) { // dark skirt under big slabs => reads as a heavy floating block
+        const sk = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 1.7, 1.4, p.hz * 1.7), under); sk.position.y = -p.hy - 0.7; sk.castShadow = true; g.add(sk);
+      }
+      this.courseGroup.add(g); this.platMeshes.push({ mesh: g, id: p.id });
+      this.cullables.push({ obj: g, z: p.z, r: p.hz + p.az + 2 });
+    }
+    // finish gantry: checkered banner on tall posts
+    const goal = course.platforms[course.platforms.length - 1], arch = new THREE.Group(), cm = this.parkMat('candy', frost);
+    const post = (x: number) => { const m = new THREE.Mesh(new THREE.BoxGeometry(1.2, 14, 1.2), cm); m.position.set(x, 7, 0); m.castShadow = !lite; arch.add(m); };
+    post(-(goal.hx - 1)); post(goal.hx - 1);
+    const banner = new THREE.Mesh(new THREE.BoxGeometry((goal.hx - 1) * 2, 3, 1), cm); banner.position.y = 13; arch.add(banner);
+    arch.position.set(0, goal.y + goal.hy, course.finishZ); this.courseGroup.add(arch);
+    // item boxes
+    const cubeGeo = new THREE.BoxGeometry(1, 1, 1), ringGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    for (const b of course.boxes) {
+      const g = new THREE.Group();
+      const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff3df2, emissiveIntensity: 1.1, roughness: 0.2 })); cube.castShadow = !lite;
+      const ring = new THREE.Mesh(ringGeo, ringMat); ring.rotation.x = Math.PI / 2; g.add(cube, ring); g.position.set(b.x, b.y, b.z);
+      this.courseGroup.add(g); this.boxMeshes[b.id] = g;
+    }
+    for (const h of course.hazards) { const ho = this.makeHazard(h, frost); this.hazardObjs.push(ho); this.cullables.push({ obj: ho.obj, z: h.kind === 'roller' ? h.z - h.len / 2 : h.z, r: h.kind === 'roller' ? h.len / 2 + 3 : h.len + 3 }); if (ho.rope) this.cullables.push({ obj: ho.rope, z: h.z, r: h.len + 3 }); }
+    for (const z of course.zones) {
+      const tex = windTexture(); tex.repeat.set(Math.max(1, Math.round(z.hz / 3)), 1);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(z.hx * 2, z.hy * 2, z.hz * 2), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }));
+      m.position.set(z.x, z.y, z.z); if (Math.abs(z.fz) > Math.abs(z.fx)) m.rotation.y = Math.PI / 2;
+      this.courseGroup.add(m); this.zoneObjs.push({ z, mesh: m, tex }); this.cullables.push({ obj: m, z: z.z, r: z.hz + 2 });
+    }
+    // scenery: tethered balloons, floating rock islands (fewer on phones)
+    const nProps = lite ? 6 : 18, sp = this.parkMat('candy', frost), bal = this.parkMat('stripesRW', frost);
+    for (let i = 0; i < nProps; i++) {
+      const rr = (k: number) => ((Math.sin((i + 1) * 12.9898 + k * 78.233) * 43758.5453) % 1 + 1) % 1, side = i % 2 ? 1 : -1, z = rr(1) * (course.length + 60) - 20, x = side * (34 + rr(2) * 70);
+      if (i % 3) { const s = 4 + rr(3) * 6, b = new THREE.Mesh(new THREE.SphereGeometry(s, 24, 16), i % 2 ? sp : bal); b.position.set(x, 10 + rr(4) * 40, z); b.castShadow = !lite; this.courseGroup.add(b); this.cullables.push({ obj: b, z, r: s + 4 }); }
+      else { const isl = new THREE.Group(), s = 9 + rr(5) * 12; const rock = new THREE.Mesh(new THREE.ConeGeometry(s, s * 1.4, 7), this.parkMat('concrete', frost, 'rock')); rock.rotation.x = Math.PI; rock.position.y = -s * 0.7; const top = new THREE.Mesh(new THREE.CylinderGeometry(s, s, 0.8, 7), this.parkMat('grass', frost)); isl.add(rock, top); isl.position.set(x, -4 + rr(6) * 14, z); this.courseGroup.add(isl); this.cullables.push({ obj: isl, z, r: s * 1.5 + 4 }); }
+    }
+  }
+
+  private makeHazard(h: CourseHazard, frost: boolean): { h: CourseHazard; obj: THREE.Object3D; rope?: THREE.Mesh } {
+    const g = new THREE.Group(), rw = this.parkMat('stripesRW', frost), steel = this.mat('hz-steel', () => new THREE.MeshStandardMaterial({ color: 0x8a919c, metalness: 0.9, roughness: 0.3 })), red = this.mat('hz-red', () => new THREE.MeshStandardMaterial({ color: 0xd93a2b, metalness: 0.2, roughness: 0.35 })), lite = this.lite;
+    if (h.kind === 'spinner') {
+      const bgeo = new THREE.BoxGeometry(h.len, h.radius * 2, h.radius * 2); scaleBoxUV(bgeo, h.len / 2, h.radius, h.radius, 2);
+      const bar = new THREE.Mesh(bgeo, rw), hub = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.9, 1.4, 20), red);
+      bar.castShadow = hub.castShadow = !lite;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.8, 12), steel); pole.position.y = -0.7;
+      g.add(bar, hub, pole); this.courseGroup.add(g); g.position.set(h.x, h.y, h.z); return { h, obj: g };
+    }
+    if (h.kind === 'pendulum') {
+      const w = (h.halfWidth ?? 4.2) + 0.5, postH = h.len + 0.8;
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 2 + 1, 0.8, 0.8), red); beam.position.set(h.x, h.y, h.z);
+      for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.9, postH, 0.9), red); p.position.set(h.x + sx * w, h.y - postH / 2, h.z); p.castShadow = !lite; g.add(p); }
+      beam.castShadow = !lite; g.add(beam);
+      const head = new THREE.Group(), ball = new THREE.Mesh(new THREE.SphereGeometry(h.radius, 24, 16), this.mat('hz-ball', () => new THREE.MeshStandardMaterial({ color: 0xff8a1f, metalness: 0.5, roughness: 0.3 }))); ball.castShadow = !lite; head.add(ball);
+      for (let i = 0; i < 10; i++) { const s = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 8), steel), d = new THREE.Vector3().setFromSphericalCoords(1, Math.acos(1 - 2 * ((i + 0.5) / 10)), i * 2.4); s.position.copy(d).multiplyScalar(h.radius + 0.12); s.lookAt(d.multiplyScalar(5)); s.rotateX(Math.PI / 2); head.add(s); }
+      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 6), steel); g.add(head, rope);
+      this.courseGroup.add(g); return { h, obj: head, rope };
+    }
+    // roller: striped giant log rolling along the lane
+    const geo = new THREE.CylinderGeometry(h.radius, h.radius, (h.halfWidth ?? 6) * 2, 32); geo.rotateZ(Math.PI / 2);
+    const mat = this.mat('hz-roller' + frost, () => { const t = surfaceTexture('stripesRW', lite ? 128 : 256).map.clone(); t.needsUpdate = true; t.repeat.set(6, 3); const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.45, metalness: 0.1 }); return m; });
+    const log = new THREE.Mesh(geo, mat); log.castShadow = !lite; g.add(log); this.courseGroup.add(g); g.position.set(h.x, h.y, h.z); return { h, obj: g };
+  }
+
   /** Moving platforms are a pure function of tick, so every client renders the identical motion. */
   syncPlatforms(tick: number) {
     if (!this.course) return;
     const c = { x: 0, y: 0, z: 0 };
     for (const pm of this.platMeshes) {
       const p = this.course.platforms[pm.id];
-      if (p.kind === 'static') { if (pm.mesh.position.y !== p.y || pm.mesh.position.z !== p.z) pm.mesh.position.set(p.x, p.y, p.z); continue; }
+      if (p.kind === 'static' || p.kind === 'blink') { if (pm.mesh.position.y !== p.y || pm.mesh.position.z !== p.z) pm.mesh.position.set(p.x, p.y, p.z); continue; }
       platformCenter(p, tick, c); pm.mesh.position.set(c.x, c.y, c.z);
     }
+  }
+
+
+  /** Hide everything farther than the view range along z (phones draw less; fog hides the pop-in). */
+  private cullRange = 320;
+  private updateCull(camZ: number) {
+    const range = this.lite ? 190 : this.cullRange;
+    for (const c of this.cullables) c.obj.visible = Math.abs(c.z - camZ) < range + c.r;
+  }
+
+  /** Everything that moves is a pure function of the tick, so all clients render identical hazards. */
+  syncDynamic(tick: number, dt: number, focus: { x: number; y: number; z: number }) {
+    if (!this.course || this.course.theme === 'neon') return;
+    const t = tick / 60;
+    this.updateCull(this.camera.position.z);
+    for (const b of this.blinkMeshes) {
+      const ph = blinkPhase(b.p, tick), duty = b.p.duty ?? 0.6, solid = ph < duty, warn = solid && ph > duty - 0.2;
+      b.mesh.visible = solid; b.ghost.visible = !solid;
+      b.mat.emissive.setHex(warn && Math.floor(t * 14) % 2 === 0 ? 0xff2a00 : 0x000000); b.mat.emissiveIntensity = warn ? 1.2 : 0;
+    }
+    // +v points toward -z on a box top; the pattern moves toward -v as offset grows, so a -z belt needs a decreasing offset
+    for (const bl of this.belts) { bl.tex.offset.y = (bl.fz * t * 0.12) % 1; bl.tex.offset.x = (bl.fx * t * 0.12) % 1; }
+    const pose = { x: 0, y: 0, z: 0, x1: 0, z1: 0, x2: 0, z2: 0, angle: 0, vx: 0, vz: 0 };
+    for (const ho of this.hazardObjs) {
+      hazardPose(ho.h, tick, pose);
+      if (ho.h.kind === 'spinner') { ho.obj.rotation.y = -pose.angle; }
+      else if (ho.h.kind === 'pendulum') {
+        ho.obj.position.set(pose.x, pose.y, pose.z);
+        const rope = ho.rope!, a = new THREE.Vector3(ho.h.x, ho.h.y, ho.h.z), b = new THREE.Vector3(pose.x, pose.y, pose.z), d = b.clone().sub(a), l = d.length();
+        rope.position.copy(a).add(b).multiplyScalar(0.5); rope.scale.set(1, l, 1); rope.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+      } else { ho.obj.position.set(pose.x, pose.y, pose.z); ho.obj.rotation.x = -pose.angle; }
+    }
+    for (const zo of this.zoneObjs) {
+      const on = windActive(zo.z, tick), dir = Math.abs(zo.z.fx) >= Math.abs(zo.z.fz) ? Math.sign(zo.z.fx) : Math.sign(zo.z.fz);
+      (zo.mesh.material as THREE.MeshBasicMaterial).opacity = on ? 0.32 : 0.04; zo.tex.offset.x = (-dir * t * (on ? 1.6 : 0.2)) % 1;
+    }
+    if (this.waterTex) { this.waterTex.offset.set((t * 0.004) % 1, (t * 0.0025) % 1); }
+    if (this.water) { this.water.position.x = focus.x; this.water.position.z = focus.z; }
+    if (this.sun) { // keep the shadow frustum centred on the action
+      const off = this.sun.position.clone().sub(this.sun.target.position); this.sun.target.position.set(focus.x, focus.y, focus.z); this.sun.position.copy(this.sun.target.position).add(off);
+      this.sun.target.updateMatrixWorld();
+    }
+    if (this.snow) { const pos = this.snow.geometry.attributes.position as THREE.BufferAttribute; this.snow.position.set(focus.x, focus.y, focus.z);
+      for (let i = 0; i < pos.count; i++) { let y = pos.getY(i) - dt * (2 + (i % 5) * 0.4); if (y < -4) y += 34; pos.setY(i, y); pos.setX(i, pos.getX(i) + Math.sin(t + i) * dt * 0.4); } pos.needsUpdate = true; }
+  }
+
+  /** Cheap contact shadow under a robot (works on phones where real shadows are off). */
+  blob(slot: number, x: number, y: number, z: number, visible: boolean, tick: number) {
+    let m = this.blobs[slot];
+    if (!m) { m = new THREE.Mesh(new THREE.CircleGeometry(0.55, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false, fog: false })); m.rotation.x = -Math.PI / 2; this.scene.add(m); this.blobs[slot] = m; }
+    const gy = visible && this.course ? groundBelow(this.course, tick, x, y + 0.5, z) : null;
+    m.visible = gy !== null; if (gy === null) return;
+    m.position.set(x, gy + 0.03, z); const k = Math.max(0.35, 1 - (y - gy) * 0.08); m.scale.setScalar(k); (m.material as THREE.MeshBasicMaterial).opacity = 0.38 * k;
   }
 
   private tmpColor = new THREE.Color();

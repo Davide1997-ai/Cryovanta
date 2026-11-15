@@ -46,6 +46,7 @@ export class Hub {
       case 'input': return c.room?.handleInput(c, m.frames);
       case 'ready': return c.room ? c.room.setReady(c, m.ready) : this.err(c, 'NOT_IN_ROOM', 'Not in a room');
       case 'leave': if (c.room) { const r = c.room; this.byToken.delete(c.token); r.leave(c); this.gc(r); c.send({ k: 'left' }); } return;
+      case 'config': { if (!c.room) return this.err(c, 'NOT_IN_ROOM', 'Not in a room'); const e = c.room.setConfig(c, m.map, m.mode); if (e) this.err(c, e, e === 'NOT_HOST' ? 'Solo l\'host può cambiare le regole' : 'Opzione non valida'); return; }
       case 'quickplay': return this.quickplay(c, m.game);
       case 'create': return this.create(c, m.game, m.isPrivate);
       case 'join': return this.joinByCode(c, m.code);

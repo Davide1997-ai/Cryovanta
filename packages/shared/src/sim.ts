@@ -1,7 +1,8 @@
 /** One round of the obstacle race. Authoritative state machine, stepped at TICK_RATE by the server. */
 import { DT, MAX_PLAYERS_PER_ROOM, TICK_RATE, TUNING as T } from './constants';
 import { createPlayer, sanitizeInput, stepPlayer } from './controller';
-import { buildCourse } from './course';
+import { buildMap } from './maps';
+import { hazardHit } from './hazards';
 import { resolveImpact, type ImpactKind, type ImpactOutcome } from './impacts';
 import { ITEM_TUNING as IT, pickSeekerTarget, rollItem, stepHazard, stepSeeker, type ItemKind } from './items';
 import { NEUTRAL_INPUT, type BoxState, type Course, type HazardState, type InputFrame, type PlayerState, type SeekerState } from './types';
@@ -14,15 +15,10 @@ export type SimEvent =
   | { t: 'finish'; slot: number; rank: number }
   | { t: 'fall'; slot: number };
 
-export interface RaceConfig { seed: number; round: number; participants: number[]; qualify: number; }
+export interface RaceConfig { seed: number; round: number; participants: number[]; qualify: number; mapId: string; difficulty: number; boxRespawn: number; }
 export interface RaceResult { qualified: number[]; eliminated: number[]; reason: 'qualified' | 'timeout' | 'empty'; }
 
 export const COUNTDOWN_SECONDS = 3;
-/** Shared by server and clients: the course is rebuilt client-side from (seed, round) — no geometry on the wire. */
-export function courseForRound(seed: number, round: number): Course {
-  return buildCourse(seed, Math.min(1, round * 0.35), 4 + round);
-}
-
 export class RaceSim {
   readonly course: Course;
   tick = 0;
@@ -43,7 +39,7 @@ export class RaceSim {
   /** last frame actually consumed per slot (for ack + repeat-last on starvation) is kept by the server session. */
 
   constructor(readonly cfg: RaceConfig) {
-    this.course = courseForRound(cfg.seed, cfg.round);
+    this.course = buildMap(cfg.mapId, cfg.seed, cfg.difficulty);
     this.rng = (cfg.seed ^ 0x9e3779b9) >>> 0;
     this.boxes = this.course.boxes.map((b) => ({ id: b.id, cooldown: 0 }));
     for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) {
@@ -87,6 +83,7 @@ export class RaceSim {
     this.pickups();
     this.stepSeekers();
     this.stepHazards();
+    this.obstacles();
     this.contacts();
     this.checkFinish();
     this.checkEnd();
@@ -139,7 +136,7 @@ export class RaceSim {
         if (dx * dx + dy * dy + dz * dz < r2) {
           const rankFrac = n > 1 ? this.rankOf[p.slot] / (n - 1) : 0;
           p.item = rollItem(this, rankFrac);
-          b.cooldown = IT.boxRespawn;
+          b.cooldown = this.cfg.boxRespawn;
           this.events.push({ t: 'pickup', slot: p.slot, item: p.item });
           break;
         }
@@ -182,6 +179,22 @@ export class RaceSim {
       }
       return true;
     });
+  }
+
+  /** Giant course hazards (spinners, hammers, rollers). Poses are a pure function of the tick. */
+  private obstacles() {
+    const hz = this.course.hazards;
+    if (!hz.length) return;
+    for (const p of this.players) {
+      if (!p.alive || p.respawn > 0 || p.finishRank > 0 || p.invuln > 0 && p.shield <= 0) continue;
+      for (const h of hz) {
+        if (Math.abs(h.z - p.z) > h.len + 4 && h.kind !== 'roller') continue; // cheap reject
+        const hit = hazardHit(h, this.tick, p.x, p.y, p.z);
+        if (!hit) continue;
+        const res = resolveImpact({ kind: 'obstacle', owner: -1, x: hit.x, y: hit.y, z: hit.z, vx: hit.dx, vz: hit.dz }, p);
+        if (res.outcome !== 'ignored') { this.events.push({ t: 'impact', kind: 'obstacle', victim: p.slot, owner: -1, outcome: res.outcome }); break; }
+      }
+    }
   }
 
   /** Robot-vs-robot: soft separation (reactive bumping) + dive shoves. */

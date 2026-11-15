@@ -2,11 +2,15 @@ import { DT } from './constants';
 import { nextRand, rangeRand } from './rng';
 import type { Course, ItemBoxDef, Platform } from './types';
 
-export interface Box { minx: number; maxx: number; miny: number; maxy: number; minz: number; maxz: number; id: number; kind: Platform['kind']; }
+export interface Box { minx: number; maxx: number; miny: number; maxy: number; minz: number; maxz: number; id: number; kind: Platform['kind']; active: boolean; }
+
+/** Blinking trap-door tiles: solid for `duty` of each cycle. Pure function of tick. */
+export function blinkPhase(p: Platform, tick: number): number { return (((tick * DT) / p.period + p.phase / (Math.PI * 2)) % 1 + 1) % 1; }
+export const blinkSolid = (p: Platform, tick: number) => blinkPhase(p, tick) < (p.duty ?? 0.6);
 
 /** Platform centre at a given sim tick. Pure function of tick => server and clients agree without syncing platform state. */
 export function platformCenter(p: Platform, tick: number, out: { x: number; y: number; z: number }) {
-  if (p.kind === 'static') { out.x = p.x; out.y = p.y; out.z = p.z; return out; }
+  if (p.kind === 'static' || p.kind === 'blink') { out.x = p.x; out.y = p.y; out.z = p.z; return out; }
   const s = Math.sin((tick * DT / p.period) * Math.PI * 2 + p.phase);
   out.x = p.x + p.ax * s; out.y = p.y + p.ay * s; out.z = p.z + p.az * s;
   return out;
@@ -17,7 +21,7 @@ export function platformBox(p: Platform, tick: number, out: Box): Box {
   out.minx = tmp.x - p.hx; out.maxx = tmp.x + p.hx;
   out.miny = tmp.y - p.hy; out.maxy = tmp.y + p.hy;
   out.minz = tmp.z - p.hz; out.maxz = tmp.z + p.hz;
-  out.id = p.id; out.kind = p.kind;
+  out.id = p.id; out.kind = p.kind; out.active = p.kind !== 'blink' || blinkSolid(p, tick);
   return out;
 }
 
@@ -119,5 +123,5 @@ export function buildCourse(seed: number, difficulty: number, segmentCount = 5):
   const gz = z + 3 + 5;
   add('static', 0, top, gz, 8, 5, { hue: 5 });
   const finishZ = gz - 2;
-  return { seed, platforms, checkpoints, boxes, finishZ, killY: -14, spawnPoints, length: gz, };
+  return { seed, platforms, checkpoints, boxes, finishZ, killY: -14, spawnPoints, length: gz, mapId: 'neon-circuit', theme: 'neon', hazards: [], zones: [] };
 }

@@ -3,7 +3,7 @@ import {
 } from '@cryovanta/shared';
 import type { Client } from './client';
 import type { GameHost, GameModule, GameSession } from './game';
-import { assertValidModule } from './game';
+import { assertValidModule, type RoomOptions } from './game';
 
 /** Mutable so tests can shorten them. */
 export const timing = { startCountdownMs: 5000, resultsMs: 8000, reconnectGraceMs: 20000 };
@@ -25,12 +25,13 @@ export class Room {
   phase: RoomPhase = 'lobby';
   private slots: (Member | null)[] = new Array(MAX_PLAYERS_PER_ROOM).fill(null);
   private session: GameSession | null = null;
+  options: RoomOptions;
   private countdownEnds = 0;
   private resultsEnds = 0;
   private lastInfoBroadcast = 0;
   onEmpty?: (room: Room) => void;
 
-  constructor(readonly code: string, readonly game: GameModule, readonly isPrivate: boolean, private clock: () => number = Date.now) { assertValidModule(game); }
+  constructor(readonly code: string, readonly game: GameModule, readonly isPrivate: boolean, private clock: () => number = Date.now) { assertValidModule(game); this.options = { map: game.options.map[0], mode: game.options.mode[0] }; }
 
   // ------------------------------------------------------------ membership
   get size() { return this.slots.reduce((n, m) => n + (m ? 1 : 0), 0); }
@@ -85,6 +86,18 @@ export class Room {
   }
 
   // ------------------------------------------------------------ lobby flow
+  get hostSlot() { return this.slots.findIndex((m) => m?.client); }
+  /** Host picks map and mode (validated against the game's allowed lists). */
+  setConfig(client: Client, map: string, mode: string): ErrorCode | null {
+    if (client.slot !== this.hostSlot) return 'NOT_HOST';
+    if (this.phase !== 'lobby' && this.phase !== 'countdown') return 'ROOM_IN_PROGRESS';
+    if (!this.game.options.map.includes(map) || !this.game.options.mode.includes(mode)) return 'BAD_REQUEST';
+    this.options = { map, mode };
+    for (const m of this.slots) if (m) m.ready = false; // everyone re-confirms after a rules change
+    this.cancelCountdown(); this.broadcastRoom();
+    return null;
+  }
+
   setReady(client: Client, ready: boolean) {
     const m = this.slots[client.slot];
     if (!m || m.client !== client || this.phase === 'playing' || this.phase === 'results') return;
@@ -110,7 +123,7 @@ export class Room {
     this.session = this.game.createSession(host);
     this.phase = 'playing';
     this.broadcastRoom();
-    this.session.start(slots);
+    this.session.start(slots, { ...this.options });
   }
 
   // ------------------------------------------------------------ in-game
@@ -145,7 +158,7 @@ export class Room {
     const members: LobbyMember[] = [];
     for (const m of this.slots) if (m) members.push({ slot: m.slot, name: m.name, ready: m.ready, host: m.slot === host, connected: !!m.client });
     return {
-      code: this.code, game: this.game.id, phase: this.phase, isPrivate: this.isPrivate, capacity: this.capacity, members,
+      code: this.code, game: this.game.id, phase: this.phase, isPrivate: this.isPrivate, capacity: this.capacity, members, options: this.options,
       countdown: this.phase === 'countdown' ? Math.max(0, Math.ceil((this.countdownEnds - this.clock()) / 1000)) : 0,
     };
   }
