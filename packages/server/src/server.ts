@@ -32,16 +32,19 @@ export async function startServer(port = 8080, opts: { staticDir?: string; host?
     ws.on('error', () => ws.terminate());
   });
 
-  // Fixed-timestep loop with catch-up (bounded) so slow ticks don't spiral.
+  // Fixed-timestep loop with catch-up (bounded). Coarse OS timers (Windows ~15 ms) would bunch ticks together and
+  // make snapshot spacing uneven => stutter on clients. So: sleep most of the wait, then yield-spin the last ~2 ms.
   const stepMs = 1000 / TICK_RATE;
   let next = performance.now();
-  let timer: NodeJS.Timeout;
+  let timer: NodeJS.Timeout | undefined, alive = true;
   const loop = () => {
+    if (!alive) return;
     const now = performance.now();
     let guard = 0;
     while (now >= next && guard++ < 5) { hub.tick(Date.now()); next += stepMs; }
     if (guard >= 5) next = now + stepMs; // drop backlog
-    timer = setTimeout(loop, Math.max(0, next - performance.now()));
+    const wait = next - performance.now();
+    if (wait > 3) timer = setTimeout(loop, wait - 2); else setImmediate(loop);
   };
   loop();
 
@@ -50,6 +53,6 @@ export async function startServer(port = 8080, opts: { staticDir?: string; host?
   const actual = typeof addr === 'object' && addr ? addr.port : port;
   return {
     hub, port: actual,
-    close: () => new Promise((resolve) => { clearTimeout(timer); for (const c of wss.clients) c.terminate(); wss.close(() => http.close(() => resolve())); }),
+    close: () => new Promise((resolve) => { alive = false; clearTimeout(timer); for (const c of wss.clients) c.terminate(); wss.close(() => http.close(() => resolve())); }),
   };
 }

@@ -6,6 +6,8 @@ import type { GameHost, GameModule, GameSession } from '../hub/game';
 
 /** If a client's input queue runs dry we repeat its last frame this many ticks before falling back to neutral. */
 const STARVE_REPEAT_TICKS = 6;
+/** Input jitter buffer: up to ~130 ms of queued frames is normal on Wi-Fi; beyond that we skip ahead. */
+const SKIP_AHEAD_AT = 8, KEEP_AFTER_SKIP = 3;
 
 /**
  * Authoritative "Neon Circuit" session.
@@ -40,6 +42,13 @@ export class ObstacleRaceSession implements GameSession {
       if (q.length >= MAX_INPUT_QUEUE) break; // flood: drop; honest clients never get this far behind
       this.lastSeq[slot] = f.seq;
       q.push(f);
+    }
+    // After a Wi-Fi stall a burst arrives at once. Do NOT run it faster than real time (that would be a speed
+    // exploit); skip ahead instead, keeping the newest frames and merging button presses so a tap is never lost.
+    if (q.length > SKIP_AHEAD_AT) {
+      const dropped = q.splice(0, q.length - KEEP_AFTER_SKIP);
+      const k = q[0];
+      q[0] = { ...k, jump: k.jump || dropped.some((d) => d.jump), dive: k.dive || dropped.some((d) => d.dive), use: k.use || dropped.some((d) => d.use) };
     }
   }
 

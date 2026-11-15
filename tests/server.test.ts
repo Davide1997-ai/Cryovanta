@@ -188,4 +188,23 @@ describe('server-side validation & anti-cheat', () => {
     for (let i = 0; i < 1000; i++) b.send({ k: 'ping', t: i });
     expect(b.errors).toContain('RATE_LIMITED');
   });
+
+  it('Wi-Fi stall: a burst of 30 queued frames is skipped-ahead (never run faster than real time) and a jump tap inside it is preserved', () => {
+    const [a] = inGame();
+    const room = w.hub.rooms.get(a.room!.code)!; const sess = (room as any).session;
+    w.run(300, () => sess.match.sim.phase === 'running');
+    const p = () => sess.match.sim.players[a.slot];
+    let seq = 5000; const z0 = p().z;
+    // 30 frames "arrive at once": frame #10 is a jump tap, everything else just runs forward
+    for (let pkt = 0; pkt < 5; pkt++) {
+      const frames = Array.from({ length: 6 }, (_, j) => ({ seq: ++seq, mx: 0, mz: 1, jump: pkt * 6 + j === 10, dive: false, use: false }));
+      a.send({ k: 'input', frames });
+    }
+    expect(sess.queues[a.slot].length).toBeLessThanOrEqual(8);
+    const q = sess.queues[a.slot];
+    expect(q.some((f: any) => f.jump), 'the tap must survive the skip-ahead').toBe(true);
+    let maxY = p().y; for (let i = 0; i < 30; i++) { w.step(); maxY = Math.max(maxY, p().y); } // half a second of real time
+    expect(p().z - z0, 'no faster than 1 input per tick').toBeLessThan(9 * 0.5 * 1.7 + 1);
+    expect(maxY, 'jump executed').toBeGreaterThan(0.3);
+  });
 });

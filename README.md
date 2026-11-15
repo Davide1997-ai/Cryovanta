@@ -23,6 +23,9 @@ npm run lan
 Costruisce il client e avvia il server, che stampa gli indirizzi, ad esempio `http://192.168.1.20:8080`.
 Ogni telefono apre quell'indirizzo nel browser (stessa Wi-Fi del PC), scrive un nome e preme **Partita rapida** → **Pronto!**.
 Sul telefono compaiono joystick virtuale (pollice sinistro), **SALTA**, **TUFFO** e il pulsante oggetto; tieni il telefono in orizzontale.
+In basso a destra c'è un overlay diagnostico: `fps · draw calls · rtt · buf · err`. `buf` è il buffer anti-jitter (si allarga da solo se il Wi-Fi è instabile),
+`rtt` la latenza verso il PC. Se la connessione cade a metà partita il client si riconnette da solo (il server tiene lo slot per 20 s).
+Consigli per un Wi-Fi più stabile: PC **via cavo** (è lui che fa da server), telefoni sulla banda **5 GHz** vicini al router, risparmio energetico del telefono spento.
 Se Windows chiede di consentire Node nel firewall, accetta per le reti private. PC e telefoni possono giocare insieme nella stessa stanza.
 
 ### App desktop (.exe, offline)

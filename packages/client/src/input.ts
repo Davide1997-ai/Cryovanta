@@ -6,6 +6,8 @@ export class Input {
   /** touch state (virtual stick + buttons) */
   private stick = { x: 0, y: 0 };
   private tJump = false; private tDive = false;
+  /** a tap shorter than one frame must still register: latched until the next sample() */
+  private jumpLatch = false; private diveLatch = false;
   constructor(canvas: HTMLElement) {
     this.initTouch();
     addEventListener('keydown', (e) => {
@@ -24,7 +26,8 @@ export class Input {
   sample() {
     let x = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0) + this.stick.x;
     let y = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0) + this.stick.y;
-    let jump = this.down('Space') || this.tJump, dive = this.down('ShiftLeft', 'ShiftRight') || this.tDive, use = this.useQueued;
+    let jump = this.down('Space') || this.tJump || this.jumpLatch, dive = this.down('ShiftLeft', 'ShiftRight') || this.tDive || this.diveLatch, use = this.useQueued;
+    this.jumpLatch = this.diveLatch = false;
     const gp = navigator.getGamepads?.()[0];
     if (gp) {
       const ax = Math.abs(gp.axes[0]) > 0.15 ? gp.axes[0] : 0, ay = Math.abs(gp.axes[1]) > 0.15 ? -gp.axes[1] : 0;
@@ -48,8 +51,9 @@ export class Input {
       if (sid !== -1) return; sid = e.pointerId; zone.setPointerCapture(sid); ox = e.clientX; oy = e.clientY;
       base.style.display = 'block'; base.style.left = ox + 'px'; base.style.top = oy + 'px'; knob.style.transform = 'translate(-50%,-50%)';
     });
-    zone.addEventListener('pointermove', (e) => {
-      if (e.pointerId !== sid) return;
+    zone.addEventListener('pointermove', (ev) => {
+      if (ev.pointerId !== sid) return;
+      const e = ev.getCoalescedEvents?.().pop() ?? ev; // newest sample, never a stale one
       let dx = e.clientX - ox, dy = e.clientY - oy; const l = Math.hypot(dx, dy);
       if (l > R) { dx = (dx / l) * R; dy = (dy / l) * R; }
       knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
@@ -64,7 +68,7 @@ export class Input {
       const up = () => { set(false); b.classList.remove('on'); };
       b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
     };
-    hold('bJump', (v) => { this.tJump = v; }); hold('bDive', (v) => { this.tDive = v; });
+    hold('bJump', (v) => { this.tJump = v; if (v) this.jumpLatch = true; }); hold('bDive', (v) => { this.tDive = v; if (v) this.diveLatch = true; });
     const item = root.querySelector<HTMLElement>('#bItem')!;
     item.addEventListener('pointerdown', () => { this.useQueued = true; item.classList.add('on'); });
     item.addEventListener('pointerup', () => item.classList.remove('on')); item.addEventListener('pointercancel', () => item.classList.remove('on'));

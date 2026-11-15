@@ -25,6 +25,8 @@ let me = -1;
 let predictor: Predictor | null = null;
 let snaps: { t: number; s: Snapshot }[] = [];
 let participants: number[] = [];
+/** Adaptive jitter buffer: widens when Wi-Fi delivers snapshots in bursts, shrinks again when it calms down. */
+let interpDelay = INTERP_DELAY_MS, snapGap = 50, lastSnapT = 0;
 let toastTimer = 0;
 
 // ------------------------------------------------------------------ UI
@@ -53,14 +55,26 @@ $('ready').onclick = () => {
   if (isTouch) { document.documentElement.requestFullscreen?.().catch(() => {}); (navigator as any).wakeLock?.request('screen').catch(() => {}); (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } const mine = room?.members.find((m) => m.slot === me); net.send({ k: 'ready', ready: !mine?.ready }); };
 $('leave').onclick = () => { net.send({ k: 'leave' }); $('results').style.display = 'none'; };
 
-let connected = false;
+let connected = false, lastName = '', lastUrl = '', reconnecting = false;
+/** Wi-Fi blip: keep playing locally and retry with the secret token — the server holds our slot for 20 s. */
+async function reconnect() {
+  connected = false;
+  if (reconnecting) return;
+  reconnecting = true;
+  const t0 = performance.now();
+  while (performance.now() - t0 < 25000) {
+    toast('📶 Riconnessione…', 1200);
+    try { await net.connect(lastUrl, lastName); connected = true; reconnecting = false; toast('Riconnesso!'); return; } catch { await new Promise((r) => setTimeout(r, 700)); }
+  }
+  reconnecting = false; room = null; predictor = null; renderRoom(); err('Connessione persa');
+}
 async function start(then: () => void) {
   err('');
   if (!connected) {
     const name = $<HTMLInputElement>('name').value.trim() || 'Bolt-' + Math.floor(Math.random() * 99);
     const url = new URLSearchParams(location.search).get('server') ?? (location.port === '5173' ? `ws://${location.hostname || 'localhost'}:8080` : `ws://${location.host}`); // dev: separate server; packaged/LAN: same origin
     try { await net.connect(url, name); connected = true; } catch { return err('Server non raggiungibile'); }
-    net.onMsg = onMsg; net.onClose = () => { connected = false; room = null; renderRoom(); err('Connessione persa'); };
+    lastName = name; lastUrl = url; net.onMsg = onMsg; net.onClose = reconnect;
   }
   then();
 }
@@ -81,7 +95,11 @@ function onMsg(m: ServerMsg) {
       break;
     }
     case 'snap': {
-      snaps.push({ t: performance.now(), s: m }); if (snaps.length > 40) snaps.shift();
+      const nowT = performance.now();
+      if (lastSnapT) { const gap = nowT - lastSnapT; snapGap = snapGap * 0.9 + Math.abs(gap - 50) * 0.1; }
+      lastSnapT = nowT;
+      interpDelay += (Math.min(260, Math.max(INTERP_DELAY_MS, 90 + snapGap * 3)) - interpDelay) * 0.05;
+      snaps.push({ t: nowT, s: m }); if (snaps.length > 40) snaps.shift();
       predictor?.reconcile(m);
       for (const e of m.ev) {
         if (e.t === 'pickup' && e.slot === me) toast(`${ICON[e.item]} ${e.item.toUpperCase()}!`);
@@ -103,15 +121,17 @@ function onMsg(m: ServerMsg) {
 }
 
 // ------------------------------------------------------------------ main loop
-let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], stepNo = 0;
-const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3();
+let fpsCount = 0, fpsT = performance.now(), fps = 0;
+(window as any).__cv = { stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; } };
+let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
+const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3(), tmpV = new THREE.Vector3();
 const seekerMeshes = new Map<number, THREE.Object3D>(), hazardMeshes = new Map<number, THREE.Object3D>();
 const seekerGeo = new THREE.OctahedronGeometry(0.35), seekerMat = new THREE.MeshStandardMaterial({ color: 0x220008, emissive: 0xff2244, emissiveIntensity: 3, metalness: 0.6, roughness: 0.2 });
 const hazGeo = new THREE.BoxGeometry(1, 1, 1);
 const hazMat = (armed: boolean) => new THREE.MeshStandardMaterial({ color: 0x2a2a33, metalness: 0.9, roughness: 0.25, emissive: armed ? 0xff3300 : 0xffaa00, emissiveIntensity: armed ? 1.6 : 0.5 });
 
 function pickBracket(rt: number) {
-  for (let i = snaps.length - 1; i > 0; i--) if (snaps[i - 1].t <= rt) return { a: snaps[i - 1], b: snaps[i], f: Math.min(1, Math.max(0, (rt - snaps[i - 1].t) / Math.max(1, snaps[i].t - snaps[i - 1].t))) };
+  for (let i = snaps.length - 1; i > 0; i--) if (snaps[i - 1].t <= rt) return { a: snaps[i - 1], b: snaps[i], f: Math.min(1.6, Math.max(0, (rt - snaps[i - 1].t) / Math.max(1, snaps[i].t - snaps[i - 1].t))) /* >1 = short extrapolation while a snapshot is late */ };
   return snaps.length ? { a: snaps[0], b: snaps[0], f: 0 } : null;
 }
 const lerpPlayer = (a: SnapPlayer, b: SnapPlayer, f: number): SnapPlayer => ({ ...b, x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f), z: lerp(a.z, b.z, f), yaw: lerpAngle(a.yaw, b.yaw, f) });
@@ -124,8 +144,12 @@ function frame(now: number) {
     while (acc >= DT) {
       acc -= DT;
       const f = predictor.step(input.sample());
-      sendBuf.push(f); if (sendBuf.length > 3) sendBuf.shift();
-      if (++stepNo % 2 === 0) net.send({ k: 'input', frames: sendBuf }); // 30 pkts/s, 3 frames each (loss redundancy)
+      sendBuf.push(f); if (sendBuf.length > 6) sendBuf.shift(); unsent++;
+    }
+    // Flush once per rendered frame (never leave fresh inputs waiting for the next slow frame).
+    // Each packet re-sends 2 older frames: a lost/late packet costs nothing (server dedups by seq).
+    if (unsent > 0 && (unsent >= 2 || now - lastSendT >= 30)) {
+      net.send({ k: 'input', frames: sendBuf.slice(-Math.min(6, unsent + 2)) }); unsent = 0; lastSendT = now;
     }
     predictor.decaySmoothing(dt);
   }
@@ -134,7 +158,9 @@ function frame(now: number) {
 }
 
 function render(dt: number, now: number) {
-  const br = pickBracket(now - INTERP_DELAY_MS);
+  fpsCount++; if (now - fpsT >= 1000) { fps = fpsCount * 1000 / (now - fpsT); fpsCount = 0; fpsT = now; }
+  stage.adaptQuality(fps || 60, dt);
+  const br = pickBracket(now - interpDelay);
   const latest = snaps[snaps.length - 1]?.s;
   stage.syncPlatforms(predictor?.running ? predictor.tick : (latest?.tick ?? 0));
   if (br && latest) {
@@ -146,15 +172,15 @@ function render(dt: number, now: number) {
         ps = { ...encodePlayer(p), it: latest.players[s].it };
         pos = { x: p.x + sm.x, y: p.y + sm.y, z: p.z + sm.z };
       }
-      robots[s].update(dt, ps, pos);
+      robots[s].update(dt, ps, pos, stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
     }
-    stage.animate(dt, new Set(latest.bx));
+    stage.animate(dt, latest.bx);
     syncProjectiles(br);
     hud(latest);
     follow(dt, latest);
   }
   if (now > toastTimer) $('htoast').textContent = '';
-  $('net').textContent = `rtt ${net.rtt.toFixed(0)}ms · err ${(predictor?.lastError ?? 0).toFixed(2)}u · pending ${predictor?.pending.length ?? 0}`;
+  $('net').textContent = `${fps.toFixed(0)}fps · ${stage.renderer.info.render.calls} calls · rtt ${net.rtt.toFixed(0)}ms · buf ${interpDelay.toFixed(0)}ms · err ${(predictor?.lastError ?? 0).toFixed(2)}u · pending ${predictor?.pending.length ?? 0}`;
   stage.render();
 }
 

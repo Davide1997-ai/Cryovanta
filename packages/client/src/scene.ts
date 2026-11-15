@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { platformCenter, type Course } from '@cryovanta/shared';
 
@@ -24,7 +25,7 @@ export class Stage {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.lite ? 1.25 : 2));
+    this.baseDpr = Math.min(devicePixelRatio, this.lite ? 1.5 : 2); this.renderer.setPixelRatio(this.baseDpr);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 0.85;
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; // clean studio reflections => "toy plastic / chrome" look
@@ -62,25 +63,31 @@ export class Stage {
     return new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false }));
   }
 
+  private matCache = new Map<string, THREE.Material>();
+  private mat(key: string, make: () => THREE.Material) { let m = this.matCache.get(key); if (!m) { m = make(); this.matCache.set(key, m); } return m; }
+
   buildCourse(course: Course) {
     this.course = course;
     this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = [];
-    const panel = new THREE.MeshStandardMaterial({ color: 0x1a2142, metalness: 0.55, roughness: 0.55 });
-    const under = new THREE.MeshStandardMaterial({ color: 0x0c0f24, metalness: 0.6, roughness: 0.5 });
+    const lite = this.lite;
+    // Draw-call budget: one top mesh + one merged trim per platform on phones (was 8 per platform).
+    const panel = this.mat('panel', () => new THREE.MeshStandardMaterial({ color: 0x1a2142, metalness: 0.55, roughness: 0.55 }));
     for (const p of course.platforms) {
       const g = new THREE.Group();
-      const top = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 2, p.hy * 2, p.hz * 2), [panel, panel, panel, under, panel, panel]);
+      const top = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 2, p.hy * 2, p.hz * 2), panel);
       const col = p.kind === 'piston' ? 0xff4d4d : NEON[p.hue % NEON.length];
-      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(top.geometry), new THREE.LineBasicMaterial({ color: col }));
-      // glowing slab trim: a thin neon FRAME on the top face (4 bars), what bloom picks up
-      const trimMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: col, emissiveIntensity: p.kind === 'piston' ? 2.4 : 1.8 });
-      const trim = new THREE.Group(), t = 0.09, y = p.hy + 0.005;
-      const bar = (w: number, d: number, x: number, z: number) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, d), trimMat); m.position.set(x, y, z); trim.add(m); };
+      const trimMat = this.mat('trim' + col, () => new THREE.MeshStandardMaterial({ color: 0x000000, emissive: col, emissiveIntensity: p.kind === 'piston' ? 2.4 : 1.8 }));
+      // neon FRAME on the top face: 4 bars merged into ONE geometry => one draw call
+      const t = 0.09, y = p.hy + 0.005, bars: THREE.BufferGeometry[] = [];
+      const bar = (w: number, d: number, x: number, z: number) => { const bg = new THREE.BoxGeometry(w, 0.04, d); bg.translate(x, y, z); bars.push(bg); };
       bar(p.hx * 2, t, 0, p.hz - t / 2); bar(p.hx * 2, t, 0, -p.hz + t / 2); bar(t, p.hz * 2 - 2 * t, p.hx - t / 2, 0); bar(t, p.hz * 2 - 2 * t, -p.hx + t / 2, 0);
-      // under-glow strip: sells the "floating platform" read
-      const glow = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 1.4, 0.05, p.hz * 1.4), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55 }));
-      glow.position.y = -p.hy - 0.03;
-      g.add(top, edge, trim, glow);
+      const trim = new THREE.Mesh(mergeGeometries(bars)!, trimMat);
+      g.add(top, trim);
+      if (!lite) { // desktop-only extras
+        g.add(new THREE.LineSegments(new THREE.EdgesGeometry(top.geometry), new THREE.LineBasicMaterial({ color: col })));
+        const glow = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 1.4, 0.05, p.hz * 1.4), this.mat('glow' + col, () => new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55 })));
+        glow.position.y = -p.hy - 0.03; g.add(glow);
+      }
       this.courseGroup.add(g);
       this.platMeshes.push({ mesh: g, id: p.id });
     }
@@ -91,20 +98,20 @@ export class Stage {
     L.position.set(-8, 4, 0); R.position.set(8, 4, 0); T.position.set(0, 8, 0); arch.add(L, R, T);
     const goal = course.platforms[course.platforms.length - 1];
     arch.position.set(0, goal.y + goal.hy, fz); this.courseGroup.add(arch);
-    // item boxes
+    // item boxes (shared geometry/materials; colour is animated per box)
+    const cubeGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9), ringGeo = new THREE.TorusGeometry(0.75, 0.035, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
     for (const b of course.boxes) {
       const g = new THREE.Group();
-      const cube = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.9), new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0xff3df2, emissiveIntensity: 1.4, roughness: 0.1, transmission: 0, clearcoat: 1 }));
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.035, 8, 40), new THREE.MeshBasicMaterial({ color: 0x00e5ff }));
-      ring.rotation.x = Math.PI / 2; g.add(cube, ring); g.position.set(b.x, b.y, b.z);
+      const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff3df2, emissiveIntensity: 1.4, roughness: 0.2 }));
+      const ring = new THREE.Mesh(ringGeo, ringMat); ring.rotation.x = Math.PI / 2; g.add(cube, ring); g.position.set(b.x, b.y, b.z);
       this.courseGroup.add(g); this.boxMeshes[b.id] = g;
     }
-    // distant floating decor so the void feels like a station, not a void
-    for (let i = 0; i < 26; i++) {
-      const s = 3 + (i * 7919 % 13);
-      const m2 = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 1), new THREE.MeshStandardMaterial({ color: 0x1a1f44, metalness: 0.7, roughness: 0.4, flatShading: true }));
-      const side = i % 2 ? 1 : -1;
-      m2.position.set(side * (40 + (i * 31) % 55), -20 + ((i * 17) % 60), (i / 26) * (course.length + 60) - 20);
+    // distant floating decor (fewer on phones)
+    const decorN = lite ? 8 : 26, decorGeo = new THREE.IcosahedronGeometry(1, 1), decorMat = new THREE.MeshStandardMaterial({ color: 0x1a1f44, metalness: 0.7, roughness: 0.4, flatShading: true });
+    for (let i = 0; i < decorN; i++) {
+      const k = lite ? 26 / decorN : 1, j = Math.floor(i * k);
+      const m2 = new THREE.Mesh(decorGeo, decorMat); m2.scale.setScalar(3 + (j * 7919 % 13));
+      m2.position.set((j % 2 ? 1 : -1) * (40 + (j * 31) % 55), -20 + ((j * 17) % 60), (j / 26) * (course.length + 60) - 20);
       this.courseGroup.add(m2);
     }
   }
@@ -120,15 +127,31 @@ export class Stage {
     }
   }
 
-  animate(dt: number, hiddenBoxes: Set<number>) {
+  private tmpColor = new THREE.Color();
+  animate(dt: number, hiddenBoxes: ReadonlySet<number> | number[]) {
     this.time += dt;
+    const hidden = hiddenBoxes instanceof Set ? hiddenBoxes : new Set(hiddenBoxes);
+    const cam = this.camera.position;
     this.boxMeshes.forEach((m, id) => {
       if (!m) return;
-      m.visible = !hiddenBoxes.has(id);
-      m.rotation.y += dt * 1.6; m.rotation.x = Math.sin(this.time * 1.4 + id) * 0.3; m.position.y += Math.sin(this.time * 2 + id) * 0.0025;
-      const c = new THREE.Color().setHSL((this.time * 0.25 + id * 0.13) % 1, 1, 0.55);
-      ((m.children[0] as THREE.Mesh).material as THREE.MeshPhysicalMaterial).emissive.copy(c);
+      const near = Math.abs(m.position.z - cam.z) < 90;
+      m.visible = near && !hidden.has(id);
+      if (!m.visible) return;
+      m.rotation.y += dt * 1.6; m.rotation.x = Math.sin(this.time * 1.4 + id) * 0.3;
+      this.tmpColor.setHSL((this.time * 0.25 + id * 0.13) % 1, 1, 0.55);
+      ((m.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).emissive.copy(this.tmpColor);
     });
+  }
+
+  /** Dynamic resolution: trade sharpness for frame-rate so controls stay fluid on slow phones. */
+  private baseDpr = 1; private dprScale = 1; private slowT = 0; private fastT = 0;
+  adaptQuality(fps: number, dtSec: number) {
+    if (!this.lite) return;
+    if (fps < 42) { this.slowT += dtSec; this.fastT = 0; } else if (fps > 56) { this.fastT += dtSec; this.slowT = 0; } else { this.slowT = this.fastT = 0; }
+    let changed = false;
+    if (this.slowT > 1.5 && this.dprScale > 0.45) { this.dprScale = Math.max(0.45, this.dprScale * 0.8); this.slowT = 0; changed = true; }
+    if (this.fastT > 5 && this.dprScale < 1) { this.dprScale = Math.min(1, this.dprScale * 1.15); this.fastT = 0; changed = true; }
+    if (changed) { this.renderer.setPixelRatio(this.baseDpr * this.dprScale); this.renderer.setSize(innerWidth, innerHeight, false); }
   }
 
   render() { if (this.lite) this.renderer.render(this.scene, this.camera); else this.composer.render(); }

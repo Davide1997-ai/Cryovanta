@@ -3,7 +3,9 @@ import type { SnapPlayer } from '@cryovanta/shared';
 
 export const ROBOT_COLORS = [0x2f7bff, 0xff4f8b, 0x35d07f, 0xffc233, 0x9b6bff, 0xff7a3d, 0x3fe0d0];
 
-const glossy = (c: number) => new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.28, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
+const LITE = matchMedia('(pointer: coarse)').matches;
+// clearcoat is expensive on mobile GPUs: phones get a standard glossy material
+const glossy = (c: number): THREE.Material => LITE ? new THREE.MeshStandardMaterial({ color: c, roughness: 0.3, metalness: 0.05 }) : new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.28, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
 const chrome = () => new THREE.MeshStandardMaterial({ color: 0xdfe8ff, roughness: 0.18, metalness: 1 });
 const emissive = (c: number, i = 2.2) => new THREE.MeshStandardMaterial({ color: 0x000000, emissive: c, emissiveIntensity: i });
 
@@ -17,6 +19,7 @@ export class Robot {
   private head!: THREE.Group;
   private armL!: THREE.Mesh; private armR!: THREE.Mesh;
   private flame!: THREE.Mesh; private shield!: THREE.Mesh; private trail!: THREE.Mesh; private stars = new THREE.Group();
+  private small: THREE.Object3D[] = [];
   private sq = 0; private sqV = 0; private wasGrounded = true; private lastVy = 0; private t = Math.random() * 10;
 
   constructor(readonly slot: number) {
@@ -27,7 +30,7 @@ export class Robot {
     const core = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12), neon); core.position.set(0, 0.52, 0.32);
     this.head = new THREE.Group(); this.head.position.y = 0.97;
     const skull = new THREE.Mesh(new THREE.SphereGeometry(0.27, 28, 20), white);
-    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), new THREE.MeshPhysicalMaterial({ color: 0x0b1020, roughness: 0.05, metalness: 0.2, clearcoat: 1 }));
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55), new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.08, metalness: 0.3 }));
     visor.rotation.x = Math.PI / 2 - 0.2; visor.position.set(0, 0.0, 0.12); visor.scale.set(1.05, 1, 0.9);
     const eyeG = new THREE.SphereGeometry(0.045, 12, 8), eyeM = emissive(0x00f0ff, 3);
     const e1 = new THREE.Mesh(eyeG, eyeM), e2 = new THREE.Mesh(eyeG, eyeM); e1.position.set(-0.09, 0.02, 0.255); e2.position.set(0.09, 0.02, 0.255);
@@ -39,6 +42,7 @@ export class Robot {
     const footG = new THREE.SphereGeometry(0.13, 16, 12);
     const fl = new THREE.Mesh(footG, steel), fr = new THREE.Mesh(footG, steel); fl.position.set(-0.15, 0.12, 0.03); fr.position.set(0.15, 0.12, 0.03); fl.scale.set(1, 0.7, 1.35); fr.scale.set(1, 0.7, 1.35);
     this.body.add(torso, chest, core, this.head, this.armL, this.armR, fl, fr);
+    this.small = [this.armL, this.armR, fl, fr, e1, e2, ant, tip, core, chest]; // hidden on far robots (LOD)
     this.flame = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.6, 14, 1, true), new THREE.MeshBasicMaterial({ color: 0x58f0ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.flame.rotation.x = Math.PI; this.flame.position.y = -0.1; this.flame.visible = false;
     this.shield = new THREE.Mesh(new THREE.SphereGeometry(0.85, 24, 16), new THREE.MeshBasicMaterial({ color: 0x6af2ff, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false })); this.shield.position.y = 0.6; this.shield.visible = false;
@@ -47,11 +51,11 @@ export class Robot {
     for (let i = 0; i < 3; i++) { const s = new THREE.Mesh(new THREE.OctahedronGeometry(0.06), emissive(0xffe066, 3)); this.stars.add(s); }
     this.stars.position.y = 1.45; this.stars.visible = false;
     this.root.add(this.body, this.flame, this.shield, this.trail, this.stars);
-    this.root.traverse((o) => { o.castShadow = false; });
   }
 
-  update(dt: number, s: SnapPlayer, pos: { x: number; y: number; z: number }) {
+  update(dt: number, s: SnapPlayer, pos: { x: number; y: number; z: number }, camDist = 0) {
     this.t += dt;
+    const detail = camDist < 24; for (const o of this.small) o.visible = detail; // LOD: far robots = 5 draw calls instead of 14
     this.root.visible = s.al === 1 && s.rs <= 0;
     this.root.position.set(pos.x, pos.y, pos.z);
     this.root.rotation.y = s.yaw;
@@ -74,7 +78,6 @@ export class Robot {
     this.trail.visible = s.bo > 0;
     this.stars.visible = s.st > 0; this.stars.rotation.y += dt * 8;
     this.stars.children.forEach((c, i) => { const a = (i / 3) * Math.PI * 2; c.position.set(Math.cos(a) * 0.35, 0, Math.sin(a) * 0.35); });
-    this.root.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.Material | undefined; if (m && 'opacity' in m && !(o === this.shield || o === this.flame || o === this.trail)) { /* i-frame blink */ } });
     this.body.visible = !(s.iv > 0 && s.st <= 0 && Math.floor(this.t * 16) % 2 === 0 && s.rs <= 0 && s.iv < 1.2);
   }
 }
