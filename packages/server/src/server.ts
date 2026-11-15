@@ -10,6 +10,9 @@ import { obstacleRaceModule } from './games/obstacleRace';
 import { Client, wsTransport } from './hub/client';
 import { Hub } from './hub/hub';
 import { ensureCert } from './certs';
+import { ProfileStore } from './profiles';
+import { fileSink } from './telemetry';
+import { join as pjoin } from 'node:path';
 
 export interface RunningServer { hub: Hub; port: number; httpsPort: number | null; close(): Promise<void>; }
 
@@ -24,8 +27,11 @@ export function lanAddresses(): string[] {
  * staticDir: optional built client (dist) to serve — used by the desktop app and LAN play.
  * httpsPort: also serve HTTPS (self-signed). Needed because phones only expose motion sensors on secure origins.
  */
-export async function startServer(port = 8080, opts: { staticDir?: string; host?: string; httpsPort?: number | null } = {}): Promise<RunningServer> {
-  const hub = new Hub([obstacleRaceModule]);
+export async function startServer(port = 8080, opts: { staticDir?: string; host?: string; httpsPort?: number | null; dataDir?: string | null } = {}): Promise<RunningServer> {
+  // Profiles (XP/levels) and match telemetry live in .data/ (set dataDir:null to keep everything in memory, e.g. in tests).
+  const dataDir = opts.dataDir === undefined ? pjoin(process.cwd(), '.data') : opts.dataDir;
+  const profiles = new ProfileStore(dataDir ? pjoin(dataDir, 'profiles.json') : null);
+  const hub = new Hub([obstacleRaceModule], { maxRooms: 500, maxClients: 3500, clock: Date.now, profiles, telemetry: dataDir ? fileSink(pjoin(dataDir, 'matches.jsonl')) : undefined });
   let httpsActual: number | null = null;
   const handler = (req: IncomingMessage, res: ServerResponse) => {
     const url = (req.url ?? '/').split('?')[0];
@@ -81,6 +87,6 @@ export async function startServer(port = 8080, opts: { staticDir?: string; host?
   }
   return {
     hub, port: actual, httpsPort: httpsActual,
-    close: () => new Promise((resolve) => { alive = false; clearTimeout(timer); for (const c of wss.clients) c.terminate(); wss.close(); let n = servers.length; for (const s of servers) s.close(() => { if (--n === 0) resolve(); }); (servers as any[]).forEach((s) => s.closeAllConnections?.()); }),
+    close: () => new Promise((resolve) => { profiles.flush(); alive = false; clearTimeout(timer); for (const c of wss.clients) c.terminate(); wss.close(); let n = servers.length; for (const s of servers) s.close(() => { if (--n === 0) resolve(); }); (servers as any[]).forEach((s) => s.closeAllConnections?.()); }),
   };
 }

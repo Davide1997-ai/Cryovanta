@@ -7,12 +7,13 @@ import type { MatchPhase } from './match';
 import type { InputFrame } from './types';
 import type { ItemKind } from './items';
 import { MAX_INPUTS_PER_PACKET } from './constants';
+import type { Look, Profile } from './cosmetics';
 
 export const PROTOCOL_VERSION = 1;
 
 // ---------- room / lobby ----------
 export type RoomPhase = 'lobby' | 'countdown' | 'playing' | 'results';
-export interface LobbyMember { slot: number; name: string; ready: boolean; host: boolean; connected: boolean; }
+export interface LobbyMember { slot: number; name: string; ready: boolean; host: boolean; connected: boolean; look: Look; level: number; }
 export interface RoomInfo {
   code: string; game: string; phase: RoomPhase; isPrivate: boolean;
   capacity: number; members: LobbyMember[]; countdown: number; // seconds, 0 if none
@@ -25,7 +26,9 @@ export type ErrorCode = 'ROOM_FULL' | 'ROOM_NOT_FOUND' | 'ROOM_IN_PROGRESS' | 'B
 
 // ---------- client -> server ----------
 export type ClientMsg =
-  | { k: 'hello'; v: number; name: string; token?: string }
+  | { k: 'hello'; v: number; name: string; token?: string; look?: Look }
+  | { k: 'look'; c: number; h: number }
+  | { k: 'emote'; id: number }
   | { k: 'quickplay'; game: string }
   | { k: 'create'; game: string; isPrivate: boolean }
   | { k: 'join'; code: string }
@@ -48,6 +51,8 @@ export interface SnapPlayer {
   it: ItemKind | null; cp: number; fr: number; al: 0 | 1;
   /** dirty play: shove cooldown / shoving anim, grab time left, held (slow) time, grab target slot */
   pc: number; ph: number; gb: number; sl: number; gt: number;
+  /** team (-1 none) and crown carrier flag */
+  tm: number; cr: 0 | 1;
 }
 export interface Snapshot {
   k: 'snap'; tick: number;
@@ -63,13 +68,18 @@ export interface Snapshot {
   qf: number; qq: number;
   /** finish line z (so a phone can show progress without knowing the map) and survival flag */
   fz: number; sv: 0 | 1;
+  /** crown round: [x, y, z, holderSlot] and cumulative hold seconds per slot */
+  cw: [number, number, number, number] | null; cs: number[];
+  /** Hex-A-Gone: flat [tileId, vanishAtSeconds, ...] for tiles somebody stepped on */
+  tv: number[];
 }
-export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; map: string; mode: string; difficulty: number; }
-export interface RoundEnd { k: 'roundEnd'; qualified: number[]; eliminated: number[]; }
-export interface MatchEnd { k: 'matchEnd'; standings: number[]; winner: number; points: number[]; }
+export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; map: string; mode: string; difficulty: number; /** team per slot (-1 none) */ teams: number[]; /** race | survival | crown */ rule: string; }
+export interface RoundEnd { k: 'roundEnd'; qualified: number[]; eliminated: number[]; teamPoints?: number[]; }
+export interface MatchEnd { k: 'matchEnd'; standings: number[]; winner: number; points: number[]; teams: number[]; teamPoints: number[]; xp: number[]; }
 
 export type ServerMsg =
-  | { k: 'welcome'; v: number; token: string; serverTime: number }
+  | { k: 'welcome'; v: number; token: string; serverTime: number; profile: Profile }
+  | { k: 'profile'; profile: Profile; gain: number }
   | { k: 'room'; room: RoomInfo; you: number }
   | { k: 'left' }
   | { k: 'error'; code: ErrorCode; msg: string }
@@ -101,7 +111,8 @@ export function parseClientMsg(text: string): ClientMsg | null {
       const v = num(m.v, 0, 1000);
       if (v === null || typeof m.name !== 'string') return null;
       const name = m.name.replace(/[^\p{L}\p{N} _\-.]/gu, '').trim().slice(0, 16) || 'Bot';
-      return { k: 'hello', v, name, token: typeof m.token === 'string' && m.token.length <= 64 ? m.token : undefined };
+      const lk = typeof m.look === 'object' && m.look !== null ? (m.look as Record<string, unknown>) : null;
+      return { k: 'hello', v, name, token: typeof m.token === 'string' && m.token.length <= 64 ? m.token : undefined, look: lk && Number.isInteger(lk.c) && Number.isInteger(lk.h) ? { c: lk.c as number, h: lk.h as number } : undefined };
     }
     case 'quickplay': return typeof m.game === 'string' && m.game.length <= 32 ? { k: 'quickplay', game: m.game } : null;
     case 'create': return typeof m.game === 'string' && m.game.length <= 32 ? { k: 'create', game: m.game, isPrivate: m.isPrivate === true } : null;
@@ -110,6 +121,8 @@ export function parseClientMsg(text: string): ClientMsg | null {
     case 'config': return typeof m.map === 'string' && typeof m.mode === 'string' && m.map.length <= 32 && m.mode.length <= 32 ? { k: 'config', map: m.map, mode: m.mode } : null;
     case 'screen': return typeof m.game === 'string' && m.game.length <= 32 && (m.code === undefined || (typeof m.code === 'string' && /^[A-Z0-9]{4,6}$/.test(m.code.toUpperCase()))) ? { k: 'screen', game: m.game, code: typeof m.code === 'string' ? m.code.toUpperCase() : undefined } : null;
     case 'start': return { k: 'start' };
+    case 'look': return Number.isInteger(m.c) && Number.isInteger(m.h) ? { k: 'look', c: m.c as number, h: m.h as number } : null;
+    case 'emote': return Number.isInteger(m.id) && (m.id as number) >= 0 && (m.id as number) < 8 ? { k: 'emote', id: m.id as number } : null;
     case 'leave': return { k: 'leave' };
     case 'input': { const frames = parseInputFrames(m.frames); return frames ? { k: 'input', frames } : null; }
     case 'ping': { const t = num(m.t); return t === null ? null : { k: 'ping', t }; }

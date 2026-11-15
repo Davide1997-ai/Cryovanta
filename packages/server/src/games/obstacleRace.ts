@@ -1,5 +1,5 @@
 import {
-  INTERMISSION_SECONDS, MAP_IDS, MODE_IDS, MAX_INPUT_QUEUE, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START, Match, SNAPSHOT_EVERY, buildSnapshot,
+  EMOTE_COOLDOWN_TICKS, INTERMISSION_SECONDS, MAP_IDS, MODE_IDS, xpForMatch, MAX_INPUT_QUEUE, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START, Match, SNAPSHOT_EVERY, buildSnapshot,
   type InputFrame, type SimEvent,
 } from '@cryovanta/shared';
 import type { GameHost, GameModule, GameSession, RoomOptions } from '../hub/game';
@@ -27,10 +27,18 @@ export class ObstacleRaceSession implements GameSession {
   private resultSent: unknown = null;
   private ticks = 0;
   finished = false;
+  private lastEmote = new Array<number>(MAX_PLAYERS_PER_ROOM).fill(-1e9);
+  private pendingEvents: SimEvent[] = [];
+  private startedAt = 0;
+  private roundLogs: { map: string; rule: string; seconds: number; reason: string }[] = [];
+  private logged: unknown = null;
+  private stats = { shoves: 0, bumps: 0, grabs: 0, throws: 0, emotes: 0, outs: {} as Record<string, number>, crownTakes: 0, finishes: 0 };
+  private opts: RoomOptions = { map: 'random', mode: 'elimination' };
 
   constructor(private host: GameHost, private seedFn: () => number) {}
 
   start(slots: number[], options: RoomOptions) {
+    this.opts = options; this.startedAt = Date.now();
     this.match = new Match(slots, this.seedFn(), options);
     this.announceRound();
   }
@@ -52,6 +60,13 @@ export class ObstacleRaceSession implements GameSession {
     }
   }
 
+  /** Emotes are cosmetic events relayed to everybody (screens animate them); rate-limited per player. */
+  handleEmote(slot: number, id: number) {
+    if (!this.match || this.finished || this.match.sim.tick - this.lastEmote[slot] < EMOTE_COOLDOWN_TICKS) return;
+    this.lastEmote[slot] = this.match.sim.tick; this.stats.emotes++;
+    this.pendingEvents.push({ t: 'emote', slot, id });
+  }
+
   removePlayer(slot: number) {
     if (this.match && !this.finished) this.match.removePlayer(slot);
     this.queues[slot].length = 0;
@@ -69,12 +84,15 @@ export class ObstacleRaceSession implements GameSession {
     this.match.step(inputs);
     const stepped = this.match.sim === simBefore && simBefore.tick !== tickBefore;
     const evTick = stepped ? [...simBefore.events] : [];
-    if (stepped) this.evBuf.push(...evTick);
+    if (this.pendingEvents.length) { evTick.push(...this.pendingEvents); this.pendingEvents = []; }
+    this.evBuf.push(...evTick);
+    this.countStats(evTick);
 
     if (this.match.roundIdx !== this.announcedRound) this.announceRound();
     if (this.match.lastResult && this.resultSent !== this.match.lastResult) {
       this.resultSent = this.match.lastResult; // identity: each round result is announced exactly once
-      this.host.broadcast({ k: 'roundEnd', qualified: this.match.lastResult.qualified, eliminated: this.match.lastResult.eliminated });
+      this.host.broadcast({ k: 'roundEnd', qualified: this.match.lastResult.qualified, eliminated: this.match.lastResult.eliminated, teamPoints: this.match.mode.kind === 'team' ? this.match.teamPoints : undefined });
+      const sim = simBefore; this.roundLogs.push({ map: sim.cfg.mapId, rule: sim.course.crown ? 'crown' : sim.course.survival ? 'survival' : 'race', seconds: Math.round((sim.tick / 60 - 3) * 10) / 10, reason: this.match.lastResult.reason });
     }
     // Big screens have no prediction, so they get state on EVERY tick (60 Hz); players/phones every SNAPSHOT_EVERY ticks.
     if (this.host.displayCount > 0) this.host.sendDisplays(buildSnapshot(this.match, this.ack, evTick));
@@ -85,14 +103,26 @@ export class ObstacleRaceSession implements GameSession {
     if (this.match.phase === 'over') {
       this.finished = true;
       this.host.broadcast(buildSnapshot(this.match, this.ack, this.evBuf));
-      this.host.broadcast({ k: 'matchEnd', standings: this.match.standings(), winner: this.match.winner, points: this.match.points });
+      const standings = this.match.standings(), n = standings.length, xp = new Array<number>(MAX_PLAYERS_PER_ROOM).fill(0);
+      standings.forEach((s, i) => { xp[s] = xpForMatch(i, n, s === this.match.winner) + Math.round(this.match.sim.crownScore[s] * 0.5); });
+      this.host.broadcast({ k: 'matchEnd', standings, winner: this.match.winner, points: this.match.points, teams: this.match.teams, teamPoints: this.match.teamPoints, xp });
+      this.host.telemetry?.({ t: Date.now(), mode: this.match.mode.id, mapOption: this.opts.map, players: n, seconds: Math.round((Date.now() - this.startedAt) / 100) / 10, standings, winner: this.match.winner, rounds: this.roundLogs, stats: this.stats });
+    }
+  }
+
+  private countStats(evs: SimEvent[]) {
+    for (const e of evs) {
+      if (e.t === 'impact') { if (e.kind === 'shove' && e.outcome === 'hit') this.stats.shoves++; if (e.kind === 'bump' && e.outcome === 'hit') this.stats.bumps++; }
+      else if (e.t === 'grab') this.stats.grabs++; else if (e.t === 'release' && e.thrown) this.stats.throws++;
+      else if (e.t === 'out') this.stats.outs[e.how] = (this.stats.outs[e.how] ?? 0) + 1;
+      else if (e.t === 'crown' && e.what === 'take') this.stats.crownTakes++; else if (e.t === 'finish') this.stats.finishes++;
     }
   }
 
   private announceRound() {
     this.announcedRound = this.match.roundIdx;
     const sim = this.match.sim;
-    this.host.broadcast({ k: 'round', round: this.match.roundIdx, seed: sim.cfg.seed, participants: sim.cfg.participants, qualify: sim.cfg.qualify, tick: sim.tick, map: sim.cfg.mapId, mode: this.match.mode.id, difficulty: sim.cfg.difficulty });
+    this.host.broadcast({ k: 'round', round: this.match.roundIdx, seed: sim.cfg.seed, participants: sim.cfg.participants, qualify: sim.cfg.qualify, tick: sim.tick, map: sim.cfg.mapId, mode: this.match.mode.id, difficulty: sim.cfg.difficulty, teams: sim.players.map((p) => p.team), rule: sim.course.crown ? 'crown' : sim.course.survival ? 'survival' : 'race' });
     for (const s of sim.cfg.participants) { this.queues[s].length = 0; }
   }
 }

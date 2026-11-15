@@ -4,6 +4,7 @@
  *  race  : runs the course (naive navigation bot) and shoves whoever is in the way
  *  brawl : chases the nearest robot and shoves / grabs / throws it (great on the Arena map)
  */
+import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import { PROTOCOL_VERSION, Predictor, botInput, buildMap, type InputFrame, type ServerMsg, type Snapshot } from '@cryovanta/shared';
 
@@ -15,7 +16,9 @@ function spawn(i: number) {
   const ws = new WebSocket(`ws://${host}`);
   let me = -1, predictor: Predictor | null = null, snap: Snapshot | null = null, seq = 0, active = false;
   const send = (m: object) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
-  ws.on('open', () => { send({ k: 'hello', v: PROTOCOL_VERSION, name: `Bot${i + 1}` }); send({ k: 'join', code: code.toUpperCase() }); });
+  // stable identity per bot => its XP/level persist (and hats unlock) like a real player's would
+  const token = createHash('sha1').update(`cvbot${i}`).digest('hex').slice(0, 32);
+  ws.on('open', () => { send({ k: 'hello', v: PROTOCOL_VERSION, name: `Bot${i + 1}`, token, look: { c: (i * 2 + 1) % 12, h: 1 + (i % 7) } }); send({ k: 'join', code: code.toUpperCase() }); });
   ws.on('message', (d) => {
     const m = JSON.parse(d.toString()) as ServerMsg;
     if (m.k === 'room') { me = m.you; if (m.room.phase === 'lobby' && !m.room.members.find((x) => x.slot === me)?.ready) setTimeout(() => send({ k: 'ready', ready: true }), 300 + i * 120); }
@@ -31,9 +34,12 @@ function spawn(i: number) {
     if (style === 'brawl') {
       let best: typeof mine | null = null, bd = 1e9;
       for (const p of snap.players) if (p.s !== me && p.al && p.rs <= 0) { const d = Math.hypot(p.x - mine.x, p.z - mine.z); if (d < bd) { bd = d; best = p; } }
-      const dx = best ? best.x - mine.x : -mine.x, dz = best ? best.z - mine.z : -mine.z, l = Math.hypot(dx, dz) || 1;
+      // crown round: go for the free crown, hunt the king, or run from the pack when you are the king
+      let gx = best ? best.x : 0, gz = best ? best.z : 0;
+      if (snap.cw) { const [cx, , cz, holder] = snap.cw; if (holder < 0) { gx = cx; gz = cz; bd = Math.hypot(gx - mine.x, gz - mine.z); } else if (holder === me && best) { gx = mine.x * 2 - best.x; gz = mine.z * 2 - best.z; } else { const h = snap.players[holder]; if (h) { gx = h.x; gz = h.z; bd = Math.hypot(gx - mine.x, gz - mine.z); } } }
+      const dx = gx - mine.x, dz = gz - mine.z, l = Math.hypot(dx, dz) || 1;
       const t = snap.tick, near = bd < 1.9;
-      f = { seq: ++seq, mx: dx / l, mz: dz / l, jump: false, dive: false, use: !!mine.it && t % 40 === 0, push: near && mine.pc === 0 && t % 7 === 0, grab: near && (i + Math.floor(t / 150)) % 3 === 0 && mine.gb >= 0 };
+      f = { seq: ++seq, mx: dx / l, mz: dz / l, jump: !!snap.cw && Math.hypot(mine.x, mine.z) < 11 && t % 24 === 0, dive: false, use: !!mine.it && t % 40 === 0, push: near && mine.pc === 0 && t % 7 === 0, grab: near && (i + Math.floor(t / 150)) % 3 === 0 && mine.gb >= 0 };
       if (mine.gb > 0 && t % 20 === 0) f.push = true; // throw what we hold
     } else if (predictor?.running) {
       const g = botInput(predictor.state, predictor.course, predictor.tick + 1, 0, { useItems: true });
@@ -41,6 +47,7 @@ function spawn(i: number) {
       f = predictor.step({ mx: g.mx, mz: g.mz, jump: g.jump, dive: g.dive, use: g.use, push: shove, grab: false });
     } else return;
     frames.push(f); if (frames.length > 3) frames.shift(); send({ k: 'input', frames });
+    if (snap.tick % (360 + i * 47) === 0) send({ k: 'emote', id: (i + (snap.tick >> 6)) % 4 }); // cheer / taunt now and then
   }, 16);
 }
 for (let i = 0; i < n; i++) spawn(i);

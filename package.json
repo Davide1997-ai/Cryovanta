@@ -18,7 +18,9 @@
     "lan": "npm run build && npm run start:server",
     "start:server": "npm -w @cryovanta/server run start",
     "play": "node scripts/launch.mjs",
-    "bots": "tsx scripts/bots.ts"
+    "bots": "tsx scripts/bots.ts",
+    "balance": "tsx scripts/balance.ts",
+    "report": "tsx scripts/report.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

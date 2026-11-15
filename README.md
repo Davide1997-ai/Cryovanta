@@ -23,7 +23,7 @@ apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--por
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 119 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 137 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
@@ -52,6 +52,21 @@ Il limite di 7 vale per i giocatori: lo schermo del PC non occupa uno slot.
 
 *Opzionale (beta)*: il pulsante "📱 Inclinazione" attiva il controllo con accelerometro; richiede HTTPS (`https://IP:porta+1/pad.html`, il browser mostra un avviso per il certificato locale).
 Con `HTTPS_PORT=0` l'HTTPS viene disattivato.
+
+### Emote, aspetto e progressione
+
+* **Emote** (💬 sul joypad): 👋 💃 😡 😂 con fumetto sopra il robot, animazione e suono; il server le limita a una ogni 1,2 s.
+* **Aspetto**: 12 colori e 8 cappelli (cappellino, cappello da festa, elica, aureola, corona d'oro, cilindro, corna). Si sceglie dal telefono; chi porta la corona in partita la indossa davvero.
+* **Progressione**: ogni partita dà XP (partecipazione + posizione + bonus vittoria + secondi di corona). Livello = 1 + √(XP/60). I **cappelli si sbloccano coi livelli** (il server rifiuta quelli non posseduti).
+  L'identità è un token segreto salvato nel telefono (`localStorage`), i profili stanno in `.data/profiles.json` sul PC.
+* **Suoni**: tutto sintetizzato in tempo reale (nessun file audio): conto alla rovescia, spinte, prese, traguardo, corona, crollo tessere, vittoria, più una musica generativa leggera (diversa per tema). Sullo schermo clicca una volta per attivare l'audio; **M** = muto.
+
+### Bilanciamento
+
+I valori (potenza della spinta, durata della presa, difficoltà dell'arena…) sono **miei**, non testati da persone. Due strumenti per aggiustarli con dati:
+
+* `npm run balance` — simula decine di partite con bot (nessuna grafica) e segnala durate, timeout, spinte, cause di eliminazione e slot avvantaggiati fuori dalle finestre previste. I bot non sono umani: serve a scovare ritmi sbagliati, non a sostituire i playtest.
+* `npm run report` — il server registra ogni partita vera in `.data/matches.jsonl` (modalità, mappa, durata, statistiche); il report le riassume e dà suggerimenti. Giocate qualche serata, poi lanciatelo e mandatemi i numeri.
 
 **Provare da soli**: `npm run bots -- <CODICE> 5 race` aggiunge 5 giocatori finti che corrono (e si spingono); `... 7 brawl` li fa litigare (ottimo per l'Arena).
 
@@ -85,7 +100,11 @@ Tre mappe (scelte dall'host in lobby o "casuale", una diversa a ogni round) e qu
 | **Corsa singola** | un solo round, vince chi arriva prima |
 | **Gran Premio** | 3 round, punti 10-8-6-5-4-3-2, vince chi ne ha di più |
 | **Caos** | eliminazione con casse oggetto che ricompaiono in ~1 s |
-| **Arena (ultimo in piedi)** | nessun traguardo: su **Platform Panic** le tessere crollano dall'esterno, due barre rotanti al centro; cadere = eliminato. Spingi, afferra e lancia gli altri giù: vince l'ultimo |
+| **Arena (ultimo in piedi)** | nessun traguardo; mappe **Platform Panic** (tessere che crollano dall'esterno, due barre rotanti) e **Hex-A-Gone** (due piani di tessere che crollano 1,8 s dopo che ci sei stato fermo 0,45 s: un salto veloce le evita). Cadere = eliminato; spingi, afferra e lancia gli altri giù |
+| **Squadre** | Rossi contro Blu su 3 corse, punti per arrivo sommati per squadra; niente fuoco amico (i compagni non si spingono, non si afferrano, non si urtano) |
+| **Corona** | *re della collina* su **Crown Hill**: prendi la corona sul piedistallo e tienila 20 secondi (anche non di fila). Chi la porta è un po' più lento e la perde se viene colpito; i trampolini negli angoli e una barra rotante rendono vivace il piano |
+
+Nella modalità **Eliminazione** l'ultimo round (quando restano 2 robot) è una **finale a corona**.
 
 Aggiungere una mappa = una voce in `packages/shared/src/maps.ts`; una modalità = una voce in `modes.ts`.
 

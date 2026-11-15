@@ -47,6 +47,12 @@
     .mini { position:absolute; padding:8px 12px; font-size:12px; border-radius:12px; border-width:1px; box-shadow:none; } #modeBtn { left:calc(16px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); } #calBtn { left:calc(150px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); }
     #banner { position:absolute; left:50%; top:32%; transform:translate(-50%,-50%); font-size:calc(var(--u)*14); font-weight:900; text-shadow:0 0 28px var(--pink); pointer-events:none; text-align:center; }
     #rot { position:fixed; inset:0; z-index:9; background:rgba(7,8,22,.96); display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px; font-size:20px; text-align:center; padding:30px; }
+    .looks { width:min(520px,100%); display:grid; gap:6px; }
+    .sw { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; } .sw i { width:34px; height:34px; border-radius:50%; border:3px solid transparent; box-shadow:0 0 6px rgba(0,0,0,.6); } .sw i.on { border-color:#fff; box-shadow:0 0 10px #fff; }
+    .hats { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; } .hats b { padding:5px 9px; border-radius:10px; font-size:13px; background:rgba(255,255,255,.08); border:2px solid transparent; } .hats b.on { border-color:var(--neon); background:rgba(0,229,255,.2); } .hats b.lock { opacity:.35; }
+    #xpbar { width:min(420px,100%); font-size:13px; text-align:center; opacity:.9; } #xpbar div { height:8px; border-radius:6px; background:rgba(255,255,255,.12); overflow:hidden; margin-top:3px; } #xpbar i { display:block; height:100%; background:linear-gradient(90deg,var(--neon),var(--pink)); }
+    #bEmote { position:absolute; right:calc(var(--u)*3 + env(safe-area-inset-right)); top:calc(var(--u)*10); width:calc(var(--u)*13); height:calc(var(--u)*13); font-size:calc(var(--u)*6); border-width:2px; opacity:.85; }
+    #emoteWheel { position:absolute; right:calc(var(--u)*3 + env(safe-area-inset-right)); top:calc(var(--u)*25); display:none; gap:calc(var(--u)*2); } #emoteWheel.open { display:flex; } #emoteWheel button { width:calc(var(--u)*14); height:calc(var(--u)*14); padding:0; font-size:calc(var(--u)*7); border-radius:50%; }
     @media (max-height: 520px) {
       #wait { gap:8px; } #wait .swatch { display:none; } #wait h1 { font-size:22px; }
       #plist { grid-template-columns:1fr 1fr; max-height:38vh; width:min(640px,100%); } #plist li { padding:6px 10px; font-size:14px; }
@@ -62,6 +68,7 @@
     <h1>NEON CIRCUIT<small>JOYPAD</small></h1>
     <input id="name" maxlength="16" placeholder="Il tuo nome" autocomplete="off" />
     <input id="code" maxlength="6" placeholder="CODICE STANZA (facoltativo)" autocomplete="off" />
+    <div class="looks" id="looksJoin"></div>
     <button id="enter" class="big">ENTRA</button>
     <div id="secure" class="muted hidden"></div>
     <div id="err" class="err"></div>
@@ -72,8 +79,10 @@
     <div class="swatch"></div>
     <h1 id="meName">—</h1>
     <div class="muted">Stanza <b id="rcode">—</b> · <span id="rcount"></span> · <span id="rphase"></span></div>
+    <div id="xpbar"></div>
     <ul id="plist"></ul>
     <div id="cfgRow" class="hidden" style="display:flex; gap:8px; width:min(420px,100%)"><select id="selMap"></select><select id="selMode"></select></div>
+    <div class="looks" id="looksWait"></div>
     <button id="ready" class="big">PRONTO!</button>
     <div style="display:flex; gap:10px"><button id="leave">Esci</button></div>
     <div id="werr" class="err"></div>
@@ -84,12 +93,13 @@
     <div id="stickZone"></div>
     <div id="stickHint">☝️ tocca e trascina qui per muoverti</div><div id="stickBase"><div id="stickKnob"></div></div>
     <div id="ring"><div id="dot"></div></div><div id="ringLbl">inclina per muoverti</div>
+    <button class="tb" id="bEmote">💬</button><div id="emoteWheel"><button data-e="0">👋</button><button data-e="1">💃</button><button data-e="2">😡</button><button data-e="3">😂</button></div>
     <div class="tb" id="bItem">🎁</div><div class="tb" id="bGrab">AFFERRA</div><div class="tb" id="bDive">TUFFO</div><div class="tb" id="bPush">SPINGI</div><div class="tb" id="bJump">SALTA</div>
     <button class="mini" id="modeBtn">📱 Inclinazione (beta)</button><button class="mini" id="calBtn">⟲ Centra</button>
     <div id="banner"></div>
   </div>
 
-  <div id="end" class="screen hidden"><h1>FINE PARTITA</h1><div id="results" style="font-size:20px; line-height:1.6; text-align:center"></div><button id="again" class="big">Torna alla stanza</button></div>
+  <div id="end" class="screen hidden"><h1>FINE PARTITA</h1><div id="xpgain" style="font-size:20px;color:#7cff3a"></div><div id="results" style="font-size:20px; line-height:1.6; text-align:center"></div><button id="again" class="big">Torna alla stanza</button></div>
   <script type="module" src="/src/pad.ts"></script>
 </body>
 </html>

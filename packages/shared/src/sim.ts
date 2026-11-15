@@ -14,11 +14,13 @@ export type SimEvent =
   | { t: 'impact'; kind: ImpactKind; victim: number; owner: number; outcome: ImpactOutcome }
   | { t: 'finish'; slot: number; rank: number }
   | { t: 'fall'; slot: number }
-  | { t: 'out'; slot: number }                       // survival: eliminated
+  | { t: 'out'; slot: number; by: number; how: string } // survival: eliminated (by = who pushed them, -1 = fell on their own)
+  | { t: 'crown'; slot: number; what: 'take' | 'drop' | 'win' }
+  | { t: 'emote'; slot: number; id: number }
   | { t: 'grab'; slot: number; victim: number }      // grabbed someone
   | { t: 'release'; slot: number; victim: number; thrown: boolean };
 
-export interface RaceConfig { seed: number; round: number; participants: number[]; qualify: number; mapId: string; difficulty: number; boxRespawn: number; }
+export interface RaceConfig { seed: number; round: number; participants: number[]; qualify: number; mapId: string; difficulty: number; boxRespawn: number; teams?: boolean; }
 export interface RaceResult { qualified: number[]; eliminated: number[]; reason: 'qualified' | 'timeout' | 'empty'; }
 
 export const COUNTDOWN_SECONDS = 3;
@@ -41,6 +43,12 @@ export class RaceSim {
   /** how many robots already crossed the finish line */
   get finishers() { return this.finishCounter; }
   get survival() { return !!this.course.survival; }
+  /** crown round state (null in other rounds) */
+  crown: { x: number; y: number; z: number; holder: number; cd: number } | null = null;
+  crownScore: number[] = new Array(MAX_PLAYERS_PER_ROOM).fill(0);
+  /** Hex-A-Gone: ids of tiles that were stepped on (their vanishAt was set by the server) */
+  dynTiles: number[] = [];
+  private tileTouch = new Map<number, number>();
   private hazardCarry = new Map<number, { v: number }>();
   /** last frame actually consumed per slot (for ack + repeat-last on starvation) is kept by the server session. */
 
@@ -51,10 +59,12 @@ export class RaceSim {
     for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) {
       const p = createPlayer(s, this.course.spawnPoints[s]);
       p.alive = cfg.participants.includes(s);
+      if (cfg.teams && p.alive) p.team = [...cfg.participants].sort((a, b) => a - b).indexOf(s) % 2; // alternate => balanced teams
       p.grounded = true;
       this.players.push(p);
     }
-    const roundSeconds = this.course.survival ? 120 : 40 + this.course.length * 0.45;
+    const roundSeconds = this.course.crown ? 110 : this.course.survival ? 120 : 40 + this.course.length * 0.45;
+    if (this.course.crown) { const cp = this.course.crownPos ?? [0, 2.4, 0]; this.crown = { x: cp[0], y: cp[1], z: cp[2], holder: -1, cd: 0 }; }
     this.roundTicksLeft = Math.round(roundSeconds * TICK_RATE);
     this.computeRanks();
   }
@@ -96,6 +106,8 @@ export class RaceSim {
     this.shoves();
     this.grabs();
     this.contacts();
+    this.tiles();
+    this.crownLogic();
     this.checkFinish();
     this.checkEnd();
   }
@@ -163,7 +175,7 @@ export class RaceSim {
         if (!p.alive || p.slot === s.owner) continue;
         const dx = p.x - s.x, dy = p.y + 0.55 - s.y, dz = p.z - s.z;
         if (dx * dx + dy * dy + dz * dz > IT.seekerHitRadius * IT.seekerHitRadius) continue;
-        const res = resolveImpact({ kind: 'seeker', owner: s.owner, x: s.x, y: s.y, z: s.z, vx: s.vx, vz: s.vz }, p);
+        const res = this.hit({ kind: 'seeker', owner: s.owner, x: s.x, y: s.y, z: s.z, vx: s.vx, vz: s.vz }, p);
         if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'seeker', victim: p.slot, owner: s.owner, outcome: res.outcome });
         if (res.consumeSource) return false;
       }
@@ -184,7 +196,7 @@ export class RaceSim {
         const reach = IT.hazardHalf + 0.4;
         if (Math.abs(p.x - h.x) > reach || Math.abs(p.z - h.z) > reach) continue;
         if (p.y > h.y + IT.hazardHalf * 2 || p.y + 1.1 < h.y) continue;
-        const res = resolveImpact({ kind: 'hazard', owner: h.owner, x: h.x, y: h.y, z: h.z, vx: 0, vz: 0 }, p);
+        const res = this.hit({ kind: 'hazard', owner: h.owner, x: h.x, y: h.y, z: h.z, vx: 0, vz: 0 }, p);
         if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'hazard', victim: p.slot, owner: h.owner, outcome: res.outcome });
         if (res.consumeSource) { this.hazardCarry.delete(h.id); return false; }
       }
@@ -202,10 +214,18 @@ export class RaceSim {
         if (Math.abs(h.z - p.z) > h.len + 4 && h.kind !== 'roller') continue; // cheap reject
         const hit = hazardHit(h, this.tick, p.x, p.y, p.z);
         if (!hit) continue;
-        const res = resolveImpact({ kind: 'obstacle', owner: -1, x: hit.x, y: hit.y, z: hit.z, vx: hit.dx, vz: hit.dz }, p);
+        const res = this.hit({ kind: 'obstacle', owner: -1, x: hit.x, y: hit.y, z: hit.z, vx: hit.dx, vz: hit.dz }, p);
         if (res.outcome !== 'ignored') { this.events.push({ t: 'impact', kind: 'obstacle', victim: p.slot, owner: -1, outcome: res.outcome }); break; }
       }
     }
+  }
+
+  /** Every impact goes through here: team immunity + remember who hit whom (for "pushed off by ..." and telemetry). */
+  private hit(src: Parameters<typeof resolveImpact>[0], q: PlayerState) {
+    const owner = src.owner >= 0 ? this.players[src.owner] : null;
+    const res = resolveImpact({ ...src, ownerTeam: owner ? owner.team : -1 }, q);
+    if (res.outcome === 'hit') { q.lastHitKind = src.kind; q.lastHitBy = src.owner; q.lastHitTick = this.tick; }
+    return res;
   }
 
   // ------------------------------------------------------------------ dirty play
@@ -221,16 +241,17 @@ export class RaceSim {
         const q = this.players[p.grabTarget], thrown = this.ok(q);
         this.releaseGrab(p);
         if (thrown) {
+          q.lastHitKind = 'throw'; q.lastHitBy = p.slot; q.lastHitTick = this.tick;
           q.vx = fx * 15; q.vz = fz * 15; q.vy = 6.5; q.stun = 0.7; q.invuln = 0.5; q.slow = 0; q.grounded = false; q.platformId = -1; q.hovering = false;
           this.events.push({ t: 'release', slot: p.slot, victim: q.slot, thrown: true }, { t: 'impact', kind: 'shove', victim: q.slot, owner: p.slot, outcome: 'hit' });
         }
         continue;
       }
       for (const q of this.players) {
-        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1) continue;
+        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1 || (p.team >= 0 && q.team === p.team)) continue;
         const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
         if (d > T.pushRange || d < 1e-3 || (dx * fx + dz * fz) / d < 0.35) continue;
-        const res = resolveImpact({ kind: 'shove', owner: p.slot, x: p.x, y: p.y, z: p.z, vx: fx, vz: fz, power: p.boost > 0 ? 1.25 : 1 }, q);
+        const res = this.hit({ kind: 'shove', owner: p.slot, x: p.x, y: p.y, z: p.z, vx: fx, vz: fz, power: p.boost > 0 ? 1.25 : 1 }, q);
         if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'shove', victim: q.slot, owner: p.slot, outcome: res.outcome });
       }
     }
@@ -256,7 +277,7 @@ export class RaceSim {
       if (!p.grabHeld || p.grabCd > 0 || p.stun > 0 || p.respawn > 0 || p.finishRank > 0) continue;
       let best: PlayerState | null = null, bd = 1e9;
       for (const q of this.players) {
-        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1 || q.invuln > 0.6) continue;
+        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1 || q.invuln > 0.6 || (p.team >= 0 && q.team === p.team)) continue;
         const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
         if (d > T.grabRange || d < 1e-3 || (dx * fx + dz * fz) / d < 0.2 || d >= bd) continue;
         best = q; bd = d;
@@ -285,7 +306,7 @@ export class RaceSim {
         if (d >= reach) continue;
         for (const [att, vic] of [[a, b], [b, a]] as const) {
           if (att.diving > 0 && vic.diving <= 0) {
-            const res = resolveImpact({ kind: 'dive', owner: att.slot, x: att.x, y: att.y, z: att.z, vx: att.vx, vz: att.vz }, vic);
+            const res = this.hit({ kind: 'dive', owner: att.slot, x: att.x, y: att.y, z: att.z, vx: att.vx, vz: att.vz }, vic);
             if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'dive', victim: vic.slot, owner: att.slot, outcome: res.outcome });
           }
         }
@@ -299,7 +320,7 @@ export class RaceSim {
           const closing = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
           if (closing > T.rammingSpeed) {
             const aIsAttacker = a.vx * nx + a.vz * nz > -(b.vx * nx + b.vz * nz), att = aIsAttacker ? a : b, vic = aIsAttacker ? b : a, sg = aIsAttacker ? 1 : -1;
-            const res = resolveImpact({ kind: 'bump', owner: att.slot, x: att.x, y: att.y, z: att.z, vx: nx * sg, vz: nz * sg, power: Math.min(1.7, closing / 7) }, vic);
+            const res = this.hit({ kind: 'bump', owner: att.slot, x: att.x, y: att.y, z: att.z, vx: nx * sg, vz: nz * sg, power: Math.min(1.7, closing / 7) }, vic);
             if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'bump', victim: vic.slot, owner: att.slot, outcome: res.outcome });
           } else { a.vx -= nx * k; a.vz -= nz * k; b.vx += nx * k; b.vz += nz * k; }
         }
@@ -309,6 +330,7 @@ export class RaceSim {
 
   // ------------------------------------------------------------------ race flow
   private computeRanks() {
+    if (this.course.crown) { const all = this.players.filter((p) => this.cfg.participants.includes(p.slot)); all.sort((a, b) => this.crownScore[b.slot] - this.crownScore[a.slot] || a.slot - b.slot); all.forEach((p, i) => { this.rankOf[p.slot] = i; }); return; }
     if (this.course.survival) { // alive first, then the dead by elimination time (later = better)
       const all = this.players.filter((p) => this.cfg.participants.includes(p.slot));
       all.sort((a, b) => (a.alive !== b.alive ? (a.alive ? -1 : 1) : a.alive ? 0 : b.outAt - a.outAt));
@@ -335,13 +357,54 @@ export class RaceSim {
     }
   }
 
+  /** Hex-A-Gone: a dynamic tile collapses shortly after somebody stands on it. The server sets vanishAt (clients get it in the snapshot). */
+  private tiles() {
+    if (!this.course.platforms.some((p) => p.dynamic)) return;
+    for (const p of this.players) {
+      if (!p.alive || !p.grounded || p.platformId < 0) continue;
+      const pl = this.course.platforms[p.platformId];
+      if (!pl.dynamic || pl.vanishAt !== undefined) continue;
+      // a quick hop across does not trigger it: you have to stand on a tile for a moment
+      const t = (this.tileTouch.get(pl.id) ?? 0) + DT; this.tileTouch.set(pl.id, t);
+      if (t >= T.tileTouchSeconds) { pl.vanishAt = this.tick * DT + (pl.collapseDelay ?? T.tileCollapseDelay); this.dynTiles.push(pl.id); }
+    }
+  }
+
+  /** King of the hill: grab the crown, keep it (cumulative seconds). Getting hit, stunned or falling makes you drop it. */
+  private crownLogic() {
+    const c = this.crown; if (!c) return;
+    const dropped = (slot: number) => { const h = this.players[slot]; h.crowned = false; c.holder = -1; c.cd = T.crownResetDelay; const cp = this.course.crownPos ?? [0, 2.4, 0]; c.x = cp[0]; c.y = cp[1]; c.z = cp[2]; this.events.push({ t: 'crown', slot, what: 'drop' }); };
+    if (c.holder >= 0) {
+      const h = this.players[c.holder];
+      if (!this.ok(h) || h.stun > 0) { dropped(c.holder); }
+      else { this.crownScore[c.holder] += DT; c.x = h.x; c.y = h.y + 1.9; c.z = h.z; }
+    } else if (c.cd > 0) c.cd -= DT;
+    else {
+      let best: PlayerState | null = null, bd = 1e9;
+      for (const p of this.players) {
+        if (!this.ok(p) || p.stun > 0) continue;
+        const d = Math.hypot(p.x - c.x, p.y + 1.0 - c.y, p.z - c.z);
+        if (d < T.crownPickupRadius + 1.1 && d < bd) { best = p; bd = d; }
+      }
+      if (best) { c.holder = best.slot; best.crowned = true; best.invuln = Math.max(best.invuln, T.crownGrace); this.events.push({ t: 'crown', slot: best.slot, what: 'take' }); } // short grace so the king can actually enjoy it
+    }
+  }
+
   private eliminate(p: PlayerState) {
     p.alive = false; p.outAt = this.tick; p.respawn = 0; p.item = null; this.releaseGrab(p);
     for (const o of this.players) if (o.grabTarget === p.slot) this.releaseGrab(o);
-    this.events.push({ t: 'out', slot: p.slot });
+    const recent = p.lastHitTick >= 0 && this.tick - p.lastHitTick < 2 * TICK_RATE; // knocked off recently => credit the culprit
+    this.events.push({ t: 'out', slot: p.slot, by: recent ? p.lastHitBy : -1, how: recent ? p.lastHitKind : 'fall' });
   }
 
   private checkEnd() {
+    if (this.course.crown) {
+      const timeout = --this.roundTicksLeft <= 0, order = [...this.cfg.participants].sort((a, b) => this.crownScore[b] - this.crownScore[a] || a - b);
+      const winner = order.find((s) => this.crownScore[s] >= T.crownWinSeconds);
+      if (winner === undefined && !(timeout && order.length)) return;
+      const w = winner ?? order[0]; this.events.push({ t: 'crown', slot: w, what: 'win' });
+      return this.end([w], winner === undefined ? 'timeout' : 'qualified', order.filter((s) => s !== w));
+    }
     if (this.course.survival) {
       const alive = this.active, timeout = --this.roundTicksLeft <= 0, solo = this.cfg.participants.length === 1;
       if (!timeout && (solo ? alive.length === 1 : alive.length > 1)) return; // still fighting

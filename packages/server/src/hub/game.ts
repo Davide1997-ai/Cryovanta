@@ -1,4 +1,5 @@
 import { MAX_PLAYERS_PER_ROOM, type InputFrame, type ServerMsg } from '@cryovanta/shared';
+import type { MatchLog } from '../telemetry';
 
 export interface RoomOptions { map: string; mode: string; }
 
@@ -10,6 +11,7 @@ export interface GameHost {
   sendPlayers(msg: ServerMsg): void;
   sendDisplays(msg: ServerMsg): void;
   readonly displayCount: number;
+  telemetry?(e: MatchLog): void;
 }
 
 export interface GameSession {
@@ -18,6 +20,7 @@ export interface GameSession {
   handleInput(slot: number, frames: InputFrame[]): void;
   /** Called at TICK_RATE while the room is in the `playing` phase. */
   tick(): void;
+  handleEmote?(slot: number, id: number): void;
   /** Slot permanently gone (left, or reconnect grace expired). */
   removePlayer(slot: number): void;
 }

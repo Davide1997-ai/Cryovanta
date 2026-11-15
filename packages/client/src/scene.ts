@@ -39,6 +39,9 @@ export class Stage {
   private zoneObjs: { z: Course['zones'][number]; mesh: THREE.Mesh; tex: THREE.Texture }[] = [];
   private blobs: THREE.Mesh[] = [];
   private timed: { p: Platform; g: THREE.Object3D; mat: THREE.MeshStandardMaterial }[] = [];
+  private crownObj: THREE.Group | null = null;
+  private bubbles: { sp: THREE.Sprite; t: number; x: number; y: number; z: number }[] = [];
+  private emojiTex = new Map<string, THREE.CanvasTexture>();
   private links: THREE.Mesh[] = [];
   private conf!: { pts: THREE.Points; pos: Float32Array; col: Float32Array; vel: Float32Array; life: Float32Array; n: number; head: number; alive: number };
   /** distance culling along the track (the park maps are ~650 units long) */
@@ -147,7 +150,7 @@ export class Stage {
   buildCourse(course: Course) {
     this.setTheme(course.theme);
     this.course = course;
-    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = []; this.blinkMeshes = []; this.belts = []; this.hazardObjs = []; this.zoneObjs = []; this.cullables = []; this.timed = [];
+    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = []; this.blinkMeshes = []; this.belts = []; this.hazardObjs = []; this.zoneObjs = []; this.cullables = []; this.timed = []; this.crownObj = null;
     if (course.theme === 'neon') this.buildNeonCourse(course); else this.buildParkCourse(course);
     if (this.water) this.water.position.y = course.killY + 8;
   }
@@ -251,10 +254,11 @@ export class Stage {
         const sk = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 1.7, 1.4, p.hz * 1.7), under); sk.position.y = -p.hy - 0.7; sk.castShadow = true; g.add(sk);
       }
       this.courseGroup.add(g); this.platMeshes.push({ mesh: g, id: p.id });
-      if (p.vanishAt !== undefined) { const m = (this.parkMat(kind, frost) as THREE.MeshStandardMaterial).clone(); mesh.material = m; this.timed.push({ p, g, mat: m }); } // collapsing arena tiles
+      if (p.vanishAt !== undefined || p.dynamic) { const m = (this.parkMat(kind, frost) as THREE.MeshStandardMaterial).clone(); mesh.material = m; this.timed.push({ p, g, mat: m }); } // collapsing arena tiles
       else this.cullables.push({ obj: g, z: p.z, r: p.hz + p.az + 2 });
     }
-    if (!course.survival) this.addFinishLine(course, frost);
+    if (!course.survival && !course.crown) this.addFinishLine(course, frost);
+    if (course.crown) this.addCrown();
     // item boxes
     const cubeGeo = new THREE.BoxGeometry(1, 1, 1), ringGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const b of course.boxes) {
@@ -339,7 +343,8 @@ export class Stage {
     if (!this.course || this.course.theme === 'neon') return;
     const t = tick / 60;
     for (const tm of this.timed) {
-      const left = tm.p.vanishAt! - t;
+      if (tm.p.vanishAt === undefined) continue; // dynamic tile nobody has stepped on yet
+      const left = tm.p.vanishAt - t;
       if (left > 0) {
         const warn = left < 4, k = left < 1.2 ? 30 : 16;
         tm.mat.emissive.setHex(warn && Math.floor(t * (left < 1.2 ? 14 : 6)) % 2 === 0 ? 0xff2a00 : 0x000000); tm.mat.emissiveIntensity = warn ? 1.1 : 0;
@@ -420,6 +425,29 @@ export class Stage {
     m.position.set(x, gy + 0.03, z); const k = Math.max(0.35, 1 - (y - gy) * 0.08); m.scale.setScalar(k); (m.material as THREE.MeshBasicMaterial).opacity = 0.38 * k;
   }
 
+  private addCrown() {
+    const g = new THREE.Group(), gold = new THREE.MeshStandardMaterial({ color: 0xffc933, metalness: 0.95, roughness: 0.2, emissive: 0xaa6a00, emissiveIntensity: 0.9, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.38, 20, 1, true), gold); g.add(ring);
+    for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2, c = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.4, 8), gold); c.position.set(Math.sin(a) * 0.55, 0.36, Math.cos(a) * 0.55); g.add(c); const j = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: [0xff3df2, 0x00e5ff, 0x7cff3a][i % 3] })); j.position.set(Math.sin(a) * 0.58, 0.58, Math.cos(a) * 0.58); g.add(j); }
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.95, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffd23d, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false })); g.add(glow);
+    this.crownObj = g; this.courseGroup.add(g);
+  }
+  /** The crown on the map: floats and spins on the pedestal; hidden while a robot carries it (the robot wears it). */
+  setCrown(pos: [number, number, number] | null, holder: number) {
+    if (!this.crownObj) return;
+    this.crownObj.visible = !!pos && holder < 0; if (!pos) return;
+    this.crownObj.position.set(pos[0], pos[1] + Math.sin(this.time * 2.5) * 0.12, pos[2]); this.crownObj.rotation.y = this.time * 1.4;
+  }
+  /** Emoji speech bubble above a robot. */
+  bubble(text: string, x: number, y: number, z: number) {
+    let tex = this.emojiTex.get(text);
+    if (!tex) { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d')!; g.font = '96px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 64, 70); tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; this.emojiTex.set(text, tex); }
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, fog: false })); sp.scale.set(0.85, 0.85, 1); sp.renderOrder = 10; this.scene.add(sp);
+    this.bubbles.push({ sp, t: 0, x, y: y + 1.9, z });
+  }
+  /** Follow the robot that emoted (so the bubble stays above it). */
+  private updateBubbles(dt: number, at: (i: number) => THREE.Vector3 | null) { void at; for (const b of this.bubbles) { b.t += dt; b.sp.position.set(b.x, b.y + b.t * 0.5, b.z); (b.sp.material as THREE.SpriteMaterial).opacity = Math.min(1, (2.2 - b.t) * 1.4); } this.bubbles = this.bubbles.filter((b) => { if (b.t > 2.2) { this.scene.remove(b.sp); b.sp.material.dispose(); return false; } return true; }); }
+
   /** Confetti burst (finish line celebration). */
   confetti(x: number, y: number, z: number) {
     if (!this.conf) {
@@ -457,7 +485,7 @@ export class Stage {
 
   private tmpColor = new THREE.Color();
   animate(dt: number, hiddenBoxes: ReadonlySet<number> | number[]) {
-    this.time += dt; this.updateConfetti(dt);
+    this.time += dt; this.updateConfetti(dt); this.updateBubbles(dt, () => null);
     this.hiddenBoxes = hiddenBoxes instanceof Set ? hiddenBoxes : new Set(hiddenBoxes);
     this.boxMeshes.forEach((m, id) => {
       if (!m) return;

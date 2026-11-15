@@ -117,6 +117,24 @@ La modalità `arena` gioca solo mappe `survival`; le modalità di corsa non estr
 Cartello **FINISH** a scacchi su due pali alti 16 u e striscia a scacchi sul pavimento; ogni riquadro mostra distanza residua, barra di avanzamento e, al taglio, **QUALIFICATO!**
 (eliminazione) / **TRAGUARDO!** con coriandoli; l'intestazione mostra `qualificati n/N`. Lo snapshot porta `qf` (arrivati), `qq` (posti), `fz` (z del traguardo), `sv` (sopravvivenza).
 
+## 4f. Round extra: Hex-A-Gone, squadre, corona
+
+* **Tessere dinamiche** (`Platform.dynamic`): lo stato non è funzione del tempo ma dei giocatori, quindi lo decide **solo il server** (`RaceSim.tiles`): dopo 0,45 s di contatto la tessera riceve `vanishAt = now + collapseDelay`
+  (1,8 s sul piano alto, 2,8 s su quello basso). `vanishAt` è già onorato da `platformBox`, quindi la fisica resta identica ovunque; i client lo ricevono nello snapshot (`tv`: `[id, vanishAt, …]`).
+* **Squadre** (`PlayerState.team`, assegnate alternando per slot): `resolveImpact` ignora spinte, urti, tuffi, droni e prese tra compagni (non trappole/ostacoli); i punti d'arrivo si sommano per squadra (`Match.teamPoints`).
+* **Corona** (`Course.crown`, `RaceSim.crown`): re della collina. Chi è entro il raggio e non stordito la prende (grazia 0,9 s), `crownScore` cresce per secondo di possesso, il portatore è al 90% di velocità e la perde se stordito/cade
+  (torna sul piedistallo dopo 1,5 s). Vince chi arriva a 20 s o, a tempo scaduto, il punteggio più alto. È anche la **finale** della modalità Eliminazione quando restano 2 robot.
+* **Causa dell'eliminazione**: `lastHit*` ricorda chi/che cosa ha colpito per ultimo; se si cade entro 2 s l'evento `out` porta `by`/`how` ("spinto fuori da…"), usato dal feed e dalla telemetria.
+
+## 4g. Progressione, aspetto, emote, audio, bilanciamento
+
+* `shared/cosmetics.ts`: 12 colori, 8 cappelli con livello minimo, curva XP, emote. `ProfileStore` (server) salva `{xp, matches, wins}` per token in `.data/profiles.json` (scrittura atomica con debounce).
+  Un token ben formato (32 hex) è l'identità; il server **valida** l'aspetto contro il livello (un cappello non sbloccato viene scartato).
+* **XP** assegnati alla fine del match nel punto unico `Room.broadcast('matchEnd')`; ogni telefono riceve `profile {gain}`.
+* **Emote**: messaggio `emote` → `session.handleEmote` (cooldown 72 tick per giocatore) → evento nello stream degli snapshot, visibile a tutti gli schermi.
+* **Audio** (`client/audio.ts`): WebAudio puro, nessun asset; effetti con limitazione di frequenza per nome, musica generativa a 4 note per tema.
+* **Telemetria**: `MatchLog` per match (`.data/matches.jsonl`); **simulatore** `scripts/balance.ts` (bot "fighter"/"hexer"/corsa) con finestre target e segnalazioni; `scripts/report.ts` aggrega i dati veri.
+
 ## 5. Formato di gara
 
 Eliminazione: ogni round passano i primi `ceil(n/2)` (7 → 4 → 2 → 1). Il round finisce quando la quota è piena, tutti sono

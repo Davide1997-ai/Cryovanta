@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { ServerMsg } from '@cryovanta/shared';
+import type { Look, ServerMsg } from '@cryovanta/shared';
 import type { Room } from './room';
 
 /** Token bucket: refuses floods without needing a global timer. */
@@ -31,6 +31,9 @@ export class Client {
   display: Room | null = null;
   slot = -1;
   greeted = false;
+  /** null until the player picks one: then the colour defaults to their slot */
+  look: Look | null = null;
+  level = 1;
   readonly limiter: RateLimiter;
   constructor(readonly transport: Transport, clock: () => number = Date.now) { this.limiter = new RateLimiter(120, 240, clock); }
   send(msg: ServerMsg, droppable = false) { this.sendRaw(JSON.stringify(msg), droppable); }

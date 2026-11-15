@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { PROTOCOL_VERSION, parseClientMsg, type ClientMsg, type ErrorCode } from '@cryovanta/shared';
+import { PROTOCOL_VERSION, defaultLook, parseClientMsg, sanitizeLook, type ClientMsg, type ErrorCode } from '@cryovanta/shared';
+import { ProfileStore, validToken } from '../profiles';
+import type { TelemetrySink } from '../telemetry';
 import { Client } from './client';
 import type { GameModule } from './game';
 import { Room } from './room';
 
-export interface HubOptions { maxRooms: number; maxClients: number; clock: () => number; }
+export interface HubOptions { maxRooms: number; maxClients: number; clock: () => number; profiles?: ProfileStore; telemetry?: TelemetrySink; }
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
 
 /** Matchmaking + room registry. Single-threaded => `quickplay` find-or-create is atomic. */
@@ -48,6 +50,8 @@ export class Hub {
       case 'input': return c.room?.handleInput(c, m.frames);
       case 'ready': return c.room ? c.room.setReady(c, m.ready) : this.err(c, 'NOT_IN_ROOM', 'Not in a room');
       case 'leave': if (c.room) { const r = c.room; this.byToken.delete(c.token); r.leave(c); this.gc(r); c.send({ k: 'left' }); } return;
+      case 'look': { c.look = sanitizeLook({ c: m.c, h: m.h }, c.level, c.look ?? defaultLook(Math.max(0, c.slot))); c.room?.updateLook(c); return; }
+      case 'emote': return c.room?.handleEmote(c, m.id);
       case 'screen': return this.screen(c, m.game, m.code);
       case 'start': { const r = c.display; if (!r) return this.err(c, 'NOT_HOST', 'Only a screen can force the start'); if (!r.forceStart()) this.err(c, 'BAD_REQUEST', 'Servono almeno 2 giocatori'); return; }
       case 'config': { const rm = c.room ?? c.display; if (!rm) return this.err(c, 'NOT_IN_ROOM', 'Not in a room'); const e = rm.setConfig(c, m.map, m.mode); if (e) this.err(c, e, e === 'NOT_HOST' ? 'Solo l\'host può cambiare le regole' : 'Opzione non valida'); return; }
@@ -61,9 +65,12 @@ export class Hub {
     if (m.v !== PROTOCOL_VERSION) return this.err(c, 'BAD_VERSION', `Server speaks protocol v${PROTOCOL_VERSION}`);
     c.name = m.name;
     const prior = m.token ? this.byToken.get(m.token) : undefined;
-    c.token = prior ? m.token! : randomBytes(16).toString('hex');
+    // A well-formed token is the player's persistent identity (profile/XP); anything else gets a fresh random one.
+    c.token = validToken(m.token) ? m.token : randomBytes(16).toString('hex');
     c.greeted = true;
-    c.send({ k: 'welcome', v: PROTOCOL_VERSION, token: c.token, serverTime: this.opts.clock() });
+    const profile = this.opts.profiles?.get(c.token) ?? { xp: 0, level: 1, prevXp: 0, nextXp: 60, matches: 0, wins: 0 };
+    c.level = profile.level; c.look = m.look ? sanitizeLook(m.look, c.level, defaultLook(0)) : null;
+    c.send({ k: 'welcome', v: PROTOCOL_VERSION, token: c.token, serverTime: this.opts.clock(), profile });
     if (prior) {
       const slot = prior.room.findReserved(c.token);
       if (slot >= 0 && prior.room.resume(c, slot)) { prior.room.sendCurrent(c); prior.room.broadcastRoom(); return; }
@@ -112,7 +119,7 @@ export class Hub {
     if (this.rooms.size >= this.opts.maxRooms) throw new Error('room limit');
     let code: string;
     do { code = Array.from(randomBytes(5), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(''); } while (this.rooms.has(code));
-    const room = new Room(code, game, isPrivate, this.opts.clock);
+    const room = new Room(code, game, isPrivate, this.opts.clock, this.opts.profiles ?? null, this.opts.telemetry ?? null);
     room.onEmpty = (r) => this.gc(r);
     this.rooms.set(code, room);
     return room;

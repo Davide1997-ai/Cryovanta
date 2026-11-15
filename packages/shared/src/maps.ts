@@ -2,7 +2,7 @@ import { buildCourse } from './course';
 import { nextRand, rangeRand } from './rng';
 import type { Course, CourseHazard, ItemBoxDef, Platform, Surface, Theme, WindZone } from './types';
 
-export interface MapDef { id: string; name: string; desc: string; theme: Theme; /** race = reach the finish line; survival = last robot standing */ kind: 'race' | 'survival'; build(seed: number, difficulty: number): Course; }
+export interface MapDef { id: string; name: string; desc: string; theme: Theme; /** race = reach the finish line; survival = last robot standing */ kind: 'race' | 'survival' | 'crown'; build(seed: number, difficulty: number): Course; }
 
 /** Small builder kit shared by the "giant obstacle park" maps. Cursor `z` = leading edge of the last slab. */
 class Kit {
@@ -169,15 +169,45 @@ function buildArena(seed: number, d: number): Course {
   return { seed, platforms, checkpoints: [{ z: -1000, spawn: [0, 0, 0] }], boxes, finishZ: 1e9, killY: -16, spawnPoints, length: 60, mapId: 'platform-panic', survival: true, theme: 'sunny', hazards, zones: [] };
 }
 
+/** Hex-A-Gone: two layers of tiles that collapse ~0.7 s after somebody stands on them. Keep moving, shove the others, don't fall twice. */
+function buildHex(seed: number, _d: number): Course {
+  const platforms: Platform[] = [], N = 7, size = 4, pitch = 4.4, mid = 3, boxes: ItemBoxDef[] = [];
+  let pid = 0;
+  for (let layer = 0; layer < 2; layer++) {
+    const top = layer === 0 ? 0 : -7.5;
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) platforms.push({ id: pid++, kind: 'static', x: (i - mid) * pitch, y: top - 0.5, z: (j - mid) * pitch, hx: size / 2, hy: 0.5, hz: size / 2, ax: 0, ay: 0, az: 0, period: 1, phase: 0, hue: (i * 2 + j + layer * 3) % 6, surface: 'normal', skin: layer === 0 ? ((i + j) % 2 ? 2 : 1) : 4, dynamic: true, collapseDelay: layer === 0 ? 1.8 : 2.8 }); // the lower layer holds a little longer: a second chance, not a free pass
+  }
+  const cells: [number, number][] = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, 2], [2, -2]];
+  const spawnPoints = cells.map(([a, b]) => [a * pitch, 0, b * pitch] as [number, number, number]);
+  for (const [a, b] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) boxes.push({ id: boxes.length, x: a * pitch, y: 1.1, z: b * pitch });
+  return { seed, platforms, checkpoints: [{ z: -1000, spawn: [0, 0, 0] }], boxes, finishZ: 1e9, killY: -18, spawnPoints, length: 50, mapId: 'hex-a-gone', survival: true, theme: 'sunny', hazards: [], zones: [] };
+}
+
+/** Crown Hill: a raised pedestal in the middle of a big pad, a sweeping bar around it and trampolines in the corners. */
+function buildCrownHill(seed: number, d: number): Course {
+  const base: Platform = { id: 0, kind: 'static', x: 0, y: -0.6, z: 0, hx: 20, hy: 0.6, hz: 20, ax: 0, ay: 0, az: 0, period: 1, phase: 0, hue: 3, surface: 'normal', skin: 3 };
+  const tier = (id: number, h: number, half: number, skin: number): Platform => ({ id, kind: 'static', x: 0, y: h / 2, z: 0, hx: half, hy: h / 2, hz: half, ax: 0, ay: 0, az: 0, period: 1, phase: 0, hue: 1, surface: 'normal', skin });
+  // three low steps (0.5 / 1.0 / 1.4) instead of one 1.4 wall: reachable with an ordinary jump
+  const platforms: Platform[] = [base, tier(1, 1.4, 5, 4), tier(2, 1.0, 7, 1), tier(3, 0.5, 9, 3)];
+  [[1, 1], [-1, 1], [1, -1], [-1, -1]].forEach(([a, b], i) => platforms.push({ id: 4 + i, kind: 'static', x: a * 13, y: 0.1, z: b * 13, hx: 2, hy: 0.1, hz: 2, ax: 0, ay: 0, az: 0, period: 1, phase: 0, hue: 0, surface: 'bounce', skin: 6 }));
+  const spawnPoints: Course['spawnPoints'] = []; for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; spawnPoints.push([Math.sin(a) * 15, 0, Math.cos(a) * 15]); }
+  const boxes: ItemBoxDef[] = [[8, 8], [-8, 8], [8, -8], [-8, -8]].map(([x, z], i) => ({ id: i, x, y: 1.1, z }));
+  const hazards: CourseHazard[] = [{ id: 0, kind: 'spinner', x: 0, y: 0.5, z: 0, len: 34, radius: 0.35, speed: 0.7 + 0.4 * d, period: 1, phase: 0, dir: 1 }];
+  return { seed, platforms, checkpoints: [{ z: -1000, spawn: [0, 0, 0] }], boxes, finishZ: 1e9, killY: -14, spawnPoints, length: 40, mapId: 'crown-hill', crown: true, crownPos: [0, 2.7, 0], theme: 'sunny', hazards, zones: [] };
+}
+
 export const MAPS: Record<string, MapDef> = {
   'neon-circuit': { id: 'neon-circuit', name: 'Neon Circuit', desc: 'Piattaforme sospese nello spazio. Veloce e tecnica.', theme: 'neon', kind: 'race', build: (seed, d) => buildCourse(seed, d, 4 + Math.round(d / 0.35)) },
   'titan-gauntlet': { id: 'titan-gauntlet', name: 'Titan Gauntlet', desc: 'Un parco giochi gigante: barre rotanti, martelli, rulli, trampolini, vento e pavimenti che spariscono.', theme: 'sunny', kind: 'race', build: (seed, d) => buildPark('titan-gauntlet', 'sunny', POOLS.titan, seed, d, 9 + Math.round(d * 3), 8) },
   'frost-run': { id: 'frost-run', name: 'Frost Run', desc: 'Pista ghiacciata: derapate, bufere laterali e pendoli.', theme: 'frost', kind: 'race', build: (seed, d) => buildPark('frost-run', 'frost', POOLS.frost, seed, d, 7 + Math.round(d * 3), 7) },
+  'hex-a-gone': { id: 'hex-a-gone', name: 'Hex-A-Gone', desc: 'Due piani di tessere che crollano subito dopo che ci sei salito: non fermarti mai!', theme: 'sunny', kind: 'survival', build: buildHex },
+  'crown-hill': { id: 'crown-hill', name: 'Crown Hill', desc: 'Prendi la corona sul piedistallo e tienila 20 secondi. Chi la porta viene preso di mira!', theme: 'sunny', kind: 'crown', build: buildCrownHill },
   'platform-panic': { id: 'platform-panic', name: 'Platform Panic', desc: 'Arena a tessere che crollano dall\'esterno: spingi gli altri giù, resta in piedi!', theme: 'sunny', kind: 'survival', build: buildArena },
 };
 export const MAP_IDS = Object.keys(MAPS);
 export const RACE_MAP_IDS = MAP_IDS.filter((id) => MAPS[id].kind === 'race');
 export const SURVIVAL_MAP_IDS = MAP_IDS.filter((id) => MAPS[id].kind === 'survival');
+export const CROWN_MAP_IDS = MAP_IDS.filter((id) => MAPS[id].kind === 'crown');
 
 export function buildMap(mapId: string, seed: number, difficulty: number): Course {
   const m = MAPS[mapId] ?? MAPS['neon-circuit'];

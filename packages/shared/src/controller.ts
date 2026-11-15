@@ -72,6 +72,7 @@ export function createPlayer(slot: number, spawn: [number, number, number]): Pla
     diveCd: 0, diving: 0, stun: 0, boost: 0, shield: 0, invuln: 0, respawn: 0, checkpoint: 0,
     item: null, useHeld: false, diveHeld: false, finishedAt: -1, finishRank: 0, alive: true,
     pushCd: 0, pushing: 0, pushHeld: false, pushReq: false, grabHeld: false, grabbing: 0, grabCd: 0, grabTarget: -1, slow: 0, outAt: -1,
+    team: -1, crowned: false, lastHitKind: '', lastHitBy: -1, lastHitTick: -1,
   };
 }
 
@@ -115,7 +116,7 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   const under = p.grounded && p.platformId >= 0 ? course.platforms[p.platformId] : undefined;
   const surf = under?.surface ?? 'normal';
   const hold = p.slow > 0 ? T.heldSpeedMul : p.grabbing > 0 ? T.grabberSpeedMul : 1; // being dragged / dragging someone
-  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1) * (surf === 'slime' ? T.slimeSpeedMul : 1) * hold;
+  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1) * (surf === 'slime' ? T.slimeSpeedMul : 1) * hold * (p.crowned ? T.crownSpeedMul : 1);
   let accel = p.grounded ? (wantsMove ? T.accelGround : T.frictionGround) : T.accelAir;
   if (surf === 'ice') accel *= wantsMove ? T.iceAccelMul : T.iceFrictionMul; // slippery: slow to start, slow to stop
   const steer = p.diving > 0 ? 0.15 : 1; // committed dive = limited steering

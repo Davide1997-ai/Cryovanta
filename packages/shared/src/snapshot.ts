@@ -11,7 +11,7 @@ export function encodePlayer(p: PlayerState): SnapPlayer {
     cy: q(p.coyote), jb: q(p.jumpBuf), jh: p.jumpHeld ? 1 : 0, hf: q(p.hoverFuel), dc: q(p.diveCd), dh: p.diveHeld ? 1 : 0, pf: p.platformId,
     st: q(p.stun), bo: q(p.boost), sh: q(p.shield), iv: q(p.invuln), rs: q(p.respawn),
     it: p.item, cp: p.checkpoint, fr: p.finishRank, al: p.alive ? 1 : 0,
-    pc: q(p.pushCd), ph: q(p.pushing), gb: q(p.grabbing), sl: q(p.slow), gt: p.grabTarget,
+    pc: q(p.pushCd), ph: q(p.pushing), gb: q(p.grabbing), sl: q(p.slow), gt: p.grabTarget, tm: p.team, cr: p.crowned ? 1 : 0,
   };
 }
 
@@ -27,6 +27,8 @@ export function buildSnapshot(m: Match, ack: number[], events: Snapshot['ev']): 
     hz: sim.hazards.map((h) => ({ id: h.id, x: q(h.x), y: q(h.y), z: q(h.z), o: h.owner, a: h.armed > 0 ? 0 : 1 })),
     ev: events,
     qf: sim.finishers, qq: sim.cfg.qualify, fz: sim.course.finishZ > 1e6 ? 0 : sim.course.finishZ, sv: sim.course.survival ? 1 : 0,
+    cw: sim.crown ? [q(sim.crown.x), q(sim.crown.y), q(sim.crown.z), sim.crown.holder] : null, cs: sim.crownScore.map((v) => q(v)),
+    tv: sim.dynTiles.flatMap((id) => [id, q(sim.course.platforms[id].vanishAt ?? 0)]),
   };
 }
 
@@ -38,7 +40,7 @@ export function decodePlayer(s: SnapPlayer, into?: PlayerState): PlayerState {
   p.coyote = s.cy; p.jumpBuf = s.jb; p.jumpHeld = s.jh === 1; p.hoverFuel = s.hf; p.diveCd = s.dc; p.diveHeld = s.dh === 1; p.platformId = s.pf;
   p.stun = s.st; p.boost = s.bo; p.shield = s.sh; p.invuln = s.iv; p.respawn = s.rs;
   p.item = s.it; p.checkpoint = s.cp; p.finishRank = s.fr; p.alive = s.al === 1;
-  p.pushCd = s.pc; p.pushing = s.ph; p.grabbing = s.gb; p.slow = s.sl; p.grabTarget = s.gt;
+  p.pushCd = s.pc; p.pushing = s.ph; p.grabbing = s.gb; p.slow = s.sl; p.grabTarget = s.gt; p.team = s.tm; p.crowned = s.cr === 1;
   p.pushHeld = into?.pushHeld ?? false; p.pushReq = false; p.grabHeld = into?.grabHeld ?? false; p.grabCd = into?.grabCd ?? 0; p.outAt = into?.outAt ?? -1;
   p.useHeld = into?.useHeld ?? false; p.finishedAt = into?.finishedAt ?? -1;
   return p;

@@ -1,4 +1,4 @@
-import { DT, MAPS, MAP_IDS, MODES, MODE_IDS, PLAYER_COLORS, type InputFrame, type RoomInfo, type ServerMsg, type Snapshot } from '@cryovanta/shared';
+import { COLOR_NAMES, DT, TUNING, EMOTES, HATS, LOOK_COLORS, MAPS, MAP_IDS, MODES, MODE_IDS, PLAYER_COLORS, TEAM_COLORS, TEAM_NAMES, type InputFrame, type RoomInfo, type ServerMsg, type Snapshot } from '@cryovanta/shared';
 import { Net } from './net';
 import { DEFAULT_TILT, screenAngles, smooth, tiltToMove, type Angles } from './tilt';
 
@@ -22,6 +22,7 @@ for (const t of ['dblclick', 'contextmenu', 'selectstart']) document.addEventLis
 const fit = () => { document.documentElement.style.setProperty('--vh-px', `${window.visualViewport?.height ?? innerHeight}px`); };
 fit(); window.visualViewport?.addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 250));
 
+let myLevelBefore = 0;
 let room: RoomInfo | null = null, me = -1, joinedName = '';
 let participants: number[] = [], roundRunning = false, eliminated = false;
 let latest: Snapshot | null = null;
@@ -29,6 +30,29 @@ let mode: 'tilt' | 'stick' = 'stick';
 let lastAngles: Angles | null = null, neutral: Angles = { roll: 0, pitch: 0 }, sensorSeen = false;
 let sx = 0, sy = 0; // smoothed tilt
 const stick = { x: 0, y: 0 };
+// ---- look (colour + hat) and progression ----
+const stored = (() => { try { return JSON.parse(localStorage.getItem('cv-look') ?? 'null') as { c: number; h: number } | null; } catch { return null; } })();
+let myLook = stored ?? { c: Math.floor(Math.random() * 7), h: 0 }, myLevel = Number((() => { try { return localStorage.getItem('cv-level'); } catch { return 1; } })() ?? 1) || 1, myTeam = -1;
+function renderLooks() {
+  for (const id of ['looksJoin', 'looksWait']) {
+    const el = $(id);
+    el.innerHTML = `<div class="sw">${LOOK_COLORS.map((c, i) => `<i data-c="${i}" class="${i === myLook.c ? 'on' : ''}" style="background:${hex(c)}" title="${COLOR_NAMES[i]}"></i>`).join('')}</div>` +
+      `<div class="hats">${HATS.map((h, i) => `<b data-h="${i}" class="${i === myLook.h ? 'on' : ''} ${h.level > myLevel ? 'lock' : ''}">${h.level > myLevel ? '🔒 Lv' + h.level : h.name}</b>`).join('')}</div>`;
+    el.onclick = (e) => {
+      const t = e.target as HTMLElement; const c = t.dataset.c, h = t.dataset.h;
+      if (c !== undefined) myLook = { ...myLook, c: Number(c) }; else if (h !== undefined && HATS[Number(h)].level <= myLevel) myLook = { ...myLook, h: Number(h) }; else return;
+      try { localStorage.setItem('cv-look', JSON.stringify(myLook)); } catch { /* private mode */ }
+      net.look = myLook; if (room) net.send({ k: 'look', c: myLook.c, h: myLook.h }); renderLooks(); document.documentElement.style.setProperty('--me', hex(LOOK_COLORS[myLook.c])); buzz(8);
+    };
+  }
+}
+function renderProfile() {
+  const p = net.profile; if (!p) return; myLevel = p.level; try { localStorage.setItem('cv-level', String(p.level)); } catch { /* ignore */ }
+  const pct = Math.max(0, Math.min(100, ((p.xp - p.prevXp) / Math.max(1, p.nextXp - p.prevXp)) * 100));
+  $('xpbar').innerHTML = `Livello <b>${p.level}</b> · ${p.xp} XP · ${p.wins} vittorie<div><i style="width:${pct}%"></i></div>`; renderLooks();
+}
+renderLooks();
+
 let tJump = false, jumpLatch = false, diveLatch = false, useLatch = false, tDive = false, pushLatch = false, tGrab = false;
 
 const show = (id: 'join' | 'wait' | 'play' | 'end') => { for (const s of ['join', 'wait', 'play', 'end']) $(s).classList.toggle('hidden', s !== id); document.body.classList.toggle('playing', id === 'play'); };
@@ -64,8 +88,8 @@ $('enter').onclick = async () => {
   const code = $<HTMLInputElement>('code').value.trim().toUpperCase(); $('err').textContent = ''; joinedName = name;
   mode = 'stick'; syncModeUi(); // joystick is the default; tilt is an opt-in experiment (button below the stick)
   document.documentElement.requestFullscreen?.().catch(() => {}); (navigator as any).wakeLock?.request('screen').catch(() => {}); (screen.orientation as any)?.lock?.('landscape').catch(() => {});
-  try { await net.connect(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`, name); } catch { return void ($('err').textContent = 'Server non raggiungibile'); }
-  net.onMsg = onMsg; net.onClose = () => void reconnect(name);
+  try { await net.connect(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`, name, myLook); } catch { return void ($('err').textContent = 'Server non raggiungibile'); }
+  net.onMsg = onMsg; net.onClose = () => void reconnect(name); renderProfile();
   net.send(code ? { k: 'join', code } : { k: 'quickplay', game: GAME });
 };
 async function explainNoSensors(why: string) {
@@ -86,17 +110,20 @@ async function reconnect(name: string) {
 // ------------------------------------------------------------------ messages
 function onMsg(m: ServerMsg) {
   switch (m.k) {
+    case 'welcome': renderProfile(); break;
+    case 'profile': renderProfile(); if (m.gain > 0) { $('xpgain').textContent = `+${m.gain} XP · Livello ${m.profile.level}`; if (m.profile.level > myLevelBefore) { $('xpgain').textContent += ' 🎉 NUOVO LIVELLO!'; buzz([80, 40, 80, 40, 200]); } myLevelBefore = m.profile.level; } break;
     case 'room': room = m.room; me = m.you; renderRoom(); break;
     case 'left': room = null; show('join'); break;
     case 'error': { const t = `${m.msg}`; ($('wait').classList.contains('hidden') ? $('err') : $('werr')).textContent = t; break; }
-    case 'round': participants = m.participants; eliminated = !m.participants.includes(me); roundRunning = false; $('banner').textContent = ''; calibrate(); show('play'); break;
+    case 'round': myTeam = m.teams?.[me] ?? -1; if (myTeam >= 0) document.documentElement.style.setProperty('--me', hex(TEAM_COLORS[myTeam])); else document.documentElement.style.setProperty('--me', hex(LOOK_COLORS[myLook.c])); participants = m.participants; eliminated = !m.participants.includes(me); roundRunning = false; $('banner').textContent = ''; calibrate(); show('play'); break;
     case 'snap': {
       latest = m; roundRunning = m.rp === 'running' && m.mp === 'round';
       const p = m.players[me]; if (!p) break;
       if (m.rp === 'countdown') { $('banner').textContent = String(Math.ceil(m.left)); calibrate(); } else if ($('banner').textContent && /^\d$/.test($('banner').textContent!)) $('banner').textContent = '';
       $('bItem').textContent = p.it ? ICON[p.it] : '🎁'; $('bItem').style.opacity = p.it ? '1' : '.4';
       $('bPush').style.opacity = p.pc > 0 ? '.45' : '1'; $('bPush').textContent = p.gb > 0 ? 'LANCIA!' : 'SPINGI'; $('bGrab').classList.toggle('on', p.gb > 0 || p.sl > 0);
-      $('dist').textContent = m.sv ? '' : m.fz > 0 ? `🏁 ${Math.max(0, Math.round(m.fz - p.z))} m` : '';
+      $('dist').textContent = m.cw ? `👑 ${(m.cs[me] ?? 0).toFixed(1)} / ${TUNING.crownWinSeconds} s` : m.sv ? '' : m.fz > 0 ? `🏁 ${Math.max(0, Math.round(m.fz - p.z))} m` : '';
+      $('pname').textContent = joinedName + (myTeam >= 0 ? ` · ${TEAM_NAMES[myTeam]}` : p.cr ? ' · 👑' : '');
       const order = m.players.filter((x) => x.al === 1).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z)); const rk = order.findIndex((x) => x.s === me) + 1;
       const alive = m.players.filter((x) => x.al === 1).length;
       $('rank').textContent = p.fr ? `🏁 #${p.fr}` : p.al ? (m.sv ? `${alive} in piedi` : `#${rk}/${order.length}`) : 'ESPULSO'; $('status').textContent = p.st > 0 ? '💫' : p.bo > 0 ? '⚡' : p.sh > 0 ? '🛡️' : p.rs > 0 ? '⌛' : '';
@@ -173,6 +200,11 @@ function syncModeUi() {
   hold('bJump', (v) => { tJump = v; }, () => { jumpLatch = true; }); hold('bDive', (v) => { tDive = v; }, () => { diveLatch = true; }); hold('bItem', () => {}, () => { useLatch = true; });
   hold('bPush', () => {}, () => { pushLatch = true; }); hold('bGrab', (v) => { tGrab = v; }, () => {});
 }
+
+// ---- emotes: tap 💬, pick one (the server rate-limits them; everybody sees it on the big screen) ----
+$('bEmote').addEventListener('pointerdown', (e) => { e.stopPropagation(); $('emoteWheel').classList.toggle('open'); });
+$('emoteWheel').addEventListener('pointerdown', (e) => { const b = (e.target as HTMLElement).closest('button'); if (!b) return; net.send({ k: 'emote', id: Number(b.dataset.e) }); $('emoteWheel').classList.remove('open'); buzz(10); });
+void EMOTES;
 
 // ------------------------------------------------------------------ 60 Hz control loop
 let acc = 0, last = performance.now(), seq = 0, unsent = 0, lastSend = 0; const buf: InputFrame[] = [];

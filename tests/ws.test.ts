@@ -4,7 +4,7 @@ import { PROTOCOL_VERSION, type ServerMsg } from '@cryovanta/shared';
 import { startServer, type RunningServer } from '../packages/server/src/server';
 
 let srv: RunningServer;
-beforeAll(async () => { srv = await startServer(0); });
+beforeAll(async () => { srv = await startServer(0, { dataDir: null }); });
 afterAll(async () => { await srv.close(); });
 
 function connect(name: string) {
@@ -45,7 +45,7 @@ describe('real websocket server', () => {
 
 describe('HTTPS/WSS (needed for phone motion sensors)', () => {
   it('serves /info and accepts secure websockets with the self-signed certificate', async () => {
-    const s = await startServer(0, { httpsPort: 0 });
+    const s = await startServer(0, { httpsPort: 0, dataDir: null });
     try {
       expect(s.httpsPort).toBeGreaterThan(0);
       const info = await (await fetch(`http://127.0.0.1:${s.port}/info`)).json();

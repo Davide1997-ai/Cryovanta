@@ -47,6 +47,9 @@ export interface PlayerState {
   grabHeld: boolean; grabbing: number; grabCd: number; grabTarget: number; // -1 = none
   slow: number;     // seconds of "being held / dragged": slower, cannot jump
   outAt: number;    // survival rounds: tick of elimination, -1 while alive
+  team: number;     // -1 none, 0/1 team round
+  crowned: boolean; // carrying the crown (slightly slower)
+  lastHitKind: string; lastHitBy: number; lastHitTick: number; // who/what hit me last (for "pushed off by ..." and telemetry)
 }
 
 export type PlatformKind = 'static' | 'mover' | 'piston' | 'blink';
@@ -62,6 +65,8 @@ export interface Platform {
   period: number; phase: number;
   /** cosmetic palette index for the neon trim */
   hue: number;
+  collapseDelay?: number;  // dynamic tiles: seconds between the touch and the collapse (default TUNING.tileCollapseDelay)
+  dynamic?: boolean;       // Hex-A-Gone: collapses ~0.7 s after somebody stands on it (the server sets vanishAt)
   vanishAt?: number;       // survival arenas: second (sim time) when this tile collapses for good
   surface?: Surface;       // default 'normal'
   flowX?: number; flowZ?: number; // conveyor belt speed (u/s)
@@ -101,6 +106,9 @@ export interface Course {
   mapId: string;
   /** survival arenas have no finish line: last robot standing wins and falling = elimination */
   survival?: boolean;
+  /** King-of-the-hill: hold the crown 25 s (cumulative). Falling just respawns. */
+  crown?: boolean;
+  crownPos?: [number, number, number];
   theme: Theme;
   hazards: CourseHazard[];
   zones: WindZone[];

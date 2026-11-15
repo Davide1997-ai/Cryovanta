@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import qrcode from 'qrcode-generator';
 import {
-  DT, INTERP_DELAY_MS, SNAPSHOT_EVERY, TICK_RATE, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
-  type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
+  DT, EMOTES, HATS, TUNING, INTERP_DELAY_MS, LOOK_COLORS, SNAPSHOT_EVERY, TEAM_COLORS, TEAM_NAMES, TICK_RATE, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
+  type Course, type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
 } from '@cryovanta/shared';
 import { Input } from './input';
+import { audio } from './audio';
 import { layoutCells } from './layout';
 import { Net } from './net';
 import { Robot, ROBOT_COLORS } from './robot';
@@ -39,6 +40,16 @@ const MIN_DELAY = SCREEN ? Math.round(SNAP_MS * 2 + 12) : INTERP_DELAY_MS;
 let interpDelay = MIN_DELAY, snapGap = 0 /* EWMA of |arrival gap - nominal| = jitter (ms) */, lastSnapT = 0;
 let toastTimer = 0;
 let inGameView = false;
+let curCourse: Course | null = null, teamsBySlot: number[] = [], ruleNow = 'race', lastCountdown = -1, teamPointsNow: number[] = [0, 0];
+const memberOf = (slot: number) => room?.members.find((m) => m.slot === slot);
+/** colour a player chose (falls back to the slot colour) */
+const lookColor = (slot: number) => LOOK_COLORS[memberOf(slot)?.look.c ?? -1] ?? ROBOT_COLORS[slot % 7];
+/** cell/ring colour: team colour in team rounds, otherwise the player's own */
+const cellColor = (slot: number) => (teamsBySlot[slot] >= 0 ? TEAM_COLORS[teamsBySlot[slot]] : lookColor(slot));
+function applyLooks() { for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) { const m = memberOf(s); robots[s].applyLook(lookColor(s), m?.look.h ?? 0); robots[s].setTeam(teamsBySlot[s] >= 0 ? TEAM_COLORS[teamsBySlot[s]] : null); } }
+// audio can only start after a user gesture
+const unlockAudio = () => { audio.unlock(); $('audioHint')?.remove(); };
+addEventListener('pointerdown', unlockAudio); addEventListener('keydown', (e) => { unlockAudio(); if (e.code === 'KeyM') { const mu = audio.toggleMute(); toast(mu ? '🔇 Audio disattivato' : '🔊 Audio attivo', 1200); } });
 let mapName = '', modeName = '';
 
 // ------------------------------------------------------------------ UI
@@ -106,12 +117,13 @@ async function start(then: () => void) {
 // ------------------------------------------------------------------ network
 function onMsg(m: ServerMsg) {
   switch (m.k) {
-    case 'room': room = m.room; me = m.you; if (SCREEN) renderScreen(); else renderRoom(); if (m.room.phase === 'lobby') inGameView = false; break;
+    case 'room': room = m.room; me = m.you; if (SCREEN) renderScreen(); else renderRoom(); applyLooks(); if (m.room.phase === 'lobby') { inGameView = false; audio.stopMusic(); } break;
     case 'left': room = null; predictor = null; renderRoom(); break;
     case 'error': err(`${m.code}: ${m.msg}`); break;
     case 'round': {
       const course = buildMap(m.map, m.seed, m.difficulty); mapName = MAPS[m.map]?.name ?? m.map; modeName = MODES[m.mode]?.name ?? m.mode;
-      stage.buildCourse(course);
+      stage.buildCourse(course); curCourse = course; teamsBySlot = m.teams ?? []; ruleNow = m.rule ?? 'race'; teamPointsNow = [0, 0]; lastCountdown = -1; applyLooks();
+      audio.startMusic(course.theme);
       predictor = SCREEN ? null : new Predictor(course, me); inGameView = true;
       snaps = []; participants = m.participants;
       $('results').style.display = 'none';
@@ -125,7 +137,19 @@ function onMsg(m: ServerMsg) {
       interpDelay += (Math.min(260, MIN_DELAY + snapGap * 3) - interpDelay) * 0.05;
       snaps.push({ t: nowT, s: m }); if (snaps.length > 40) snaps.shift();
       predictor?.reconcile(m);
+      if (curCourse) for (let i = 0; i + 1 < m.tv.length; i += 2) curCourse.platforms[m.tv[i]].vanishAt = m.tv[i + 1]; // Hex-A-Gone tiles the server has marked
+      if (m.rp === 'countdown' && m.mp === 'round') { const cd = Math.ceil(m.left); if (cd !== lastCountdown) { lastCountdown = cd; audio.play(cd > 0 ? 'beep' : 'go'); } }
+      else if (lastCountdown > 0 && m.rp === 'running') { audio.play('go'); lastCountdown = -1; }
       for (const e of m.ev) {
+        { // sounds + emotes + crown (everybody's actions are heard/seen on the big screen)
+          const pos = (s: number) => robotPos[s];
+          if (e.t === 'emote') { stage.bubble(EMOTES[e.id] ?? '👍', pos(e.slot).x, pos(e.slot).y, pos(e.slot).z); robots[e.slot].emote(e.id, performance.now()); audio.play('emote'); }
+          else if (e.t === 'pickup') audio.play('pickup'); else if (e.t === 'use') audio.play(e.item === 'boost' ? 'use' : e.item === 'seeker' ? 'use' : 'grab');
+          else if (e.t === 'impact') audio.play(e.kind === 'shove' ? 'shove' : e.kind === 'bump' ? 'bump' : 'hit');
+          else if (e.t === 'grab') audio.play('grab'); else if (e.t === 'release' && e.thrown) audio.play('throw');
+          else if (e.t === 'finish') audio.play(e.slot === me || SCREEN ? 'finish' : 'qualified'); else if (e.t === 'fall') audio.play('fall'); else if (e.t === 'out') audio.play('out');
+          else if (e.t === 'crown') { audio.play(e.what === 'take' ? 'crownTake' : e.what === 'drop' ? 'crownDrop' : 'win'); if (SCREEN) feed(e.what === 'take' ? `👑 ${memberOf(e.slot)?.name ?? '?'} prende la corona` : e.what === 'drop' ? `💥 ${memberOf(e.slot)?.name ?? '?'} perde la corona` : `🏆 ${memberOf(e.slot)?.name ?? '?'} vince la corona!`); }
+        }
         if (e.t === 'pickup' && e.slot === me) toast(`${ICON[e.item]} ${e.item.toUpperCase()}!`);
         if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : e.kind === 'obstacle' ? '🔨 OSTACOLO!' : e.kind === 'shove' ? '👊 SPINTO!' : e.kind === 'bump' ? '💢 URTATO!' : '💫 COLPITO!');
         { // global feedback (screen shows everyone's actions; a player's own robot gets personal toasts below)
@@ -134,7 +158,7 @@ function onMsg(m: ServerMsg) {
           if (e.t === 'impact' && SCREEN && (e.kind === 'shove' || e.kind === 'bump') && e.outcome === 'hit') feed(`${e.kind === 'shove' ? '👊' : '💢'} ${nm(e.owner)} ➜ ${nm(e.victim)}`);
           if (e.t === 'grab' && SCREEN) feed(`✋ ${nm(e.slot)} afferra ${nm(e.victim)}`);
           if (e.t === 'release' && e.thrown && SCREEN) feed(`🚀 ${nm(e.slot)} lancia ${nm(e.victim)}`);
-          if (e.t === 'out') feed(`💀 ${nm(e.slot)} è fuori!`);
+          if (e.t === 'out') feed(e.by >= 0 ? `💀 ${nm(e.slot)} ${e.how === 'throw' ? 'lanciato fuori' : 'spinto fuori'} da ${nm(e.by)}` : `💀 ${nm(e.slot)} è caduto!`);
         }
         if (SCREEN && e.t === 'finish') { const nm = room?.members.find((x) => x.slot === e.slot)?.name ?? '?'; toast(`🏁 ${nm} è #${e.rank}`, 2200); }
         if (e.t === 'finish' && e.slot === me) toast(`🏁 TRAGUARDO #${e.rank}`, 2500);
@@ -144,12 +168,15 @@ function onMsg(m: ServerMsg) {
     }
     case 'roundEnd':
       if (SCREEN) { const nm = (s: number) => room?.members.find((x) => x.slot === s)?.name ?? '?'; toast(MODES[room?.options.mode ?? '']?.kind === 'elimination' && m.eliminated.length ? `❌ Eliminati: ${m.eliminated.map(nm).join(', ')}` : `🏁 Round finito: ${m.qualified.slice(0, 3).map(nm).join(' › ')}`, 4500); }
-      else toast(m.qualified.includes(me) ? '✅ QUALIFICATO' : '❌ ELIMINATO', 3500); break;
+      else toast(m.qualified.includes(me) ? '✅ QUALIFICATO' : '❌ ELIMINATO', 3500);
+      if (m.teamPoints) { teamPointsNow = m.teamPoints; if (SCREEN) feed(`🏁 ${TEAM_NAMES[0]} ${m.teamPoints[0]} — ${m.teamPoints[1]} ${TEAM_NAMES[1]}`); } audio.play('qualified'); break;
     case 'matchEnd': {
       const names = new Map(room?.members.map((x) => [x.slot, x.name]));
       const resEl = SCREEN ? $('sResults') : $('results'); resEl.style.display = ''; if (!SCREEN) $('lobby').style.display = '';
       const gp = m.points.some((p) => p > 0);
-      resEl.innerHTML = `<h3>Classifica · ${esc(modeName)}</h3>` + m.standings.map((s, i) => `<div>${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}${gp ? ` — ${m.points[s]} pt` : ''}</div>`).join('');
+      const team = m.teams.some((t) => t >= 0), head = team ? `<div style="font-size:1.2em;margin-bottom:6px">${m.teamPoints[0] >= m.teamPoints[1] ? TEAM_NAMES[0] : TEAM_NAMES[1]} vincono! (${m.teamPoints[0]} — ${m.teamPoints[1]})</div>` : '';
+      resEl.innerHTML = `<h3>Classifica · ${esc(modeName)}</h3>${head}` + m.standings.map((s, i) => `<div style="color:${hexc(cellColor(s))}">${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}${gp || team ? ` — ${m.points[s]} pt` : ''} <small style="opacity:.7">+${m.xp[s] ?? 0} XP</small></div>`).join('');
+      audio.play('win'); audio.stopMusic();
       break;
     }
   }
@@ -157,7 +184,7 @@ function onMsg(m: ServerMsg) {
 
 // ------------------------------------------------------------------ main loop
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
-(window as any).__cv = { get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
+(window as any).__cv = { get robots() { return robots; }, get robotPos() { return robotPos; }, get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
 interface PlayerCam { cam: THREE.PerspectiveCamera; pos: THREE.Vector3; look: THREE.Vector3; init: boolean; baseY: number }
 const playerCams: PlayerCam[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => ({ cam: new THREE.PerspectiveCamera(60, 1, 0.1, 1800), pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, baseY: 0 }));
@@ -220,6 +247,7 @@ function render(dt: number, now: number) {
       stage.blob(s, pos.x, pos.y, pos.z, ps.al === 1 && ps.rs <= 0, dynTick);
     }
     for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) { const p = latest.players[s]; stage.link(s, p && p.gb > 0 && p.gt >= 0 ? robotPos[s] : null, p && p.gt >= 0 ? robotPos[p.gt] : null); }
+    stage.setCrown(latest.cw ? [latest.cw[0], latest.cw[1], latest.cw[2]] : null, latest.cw ? latest.cw[3] : -1);
     stage.animate(dt, latest.bx);
     syncProjectiles(br);
     if (SCREEN) { if (splitting) splitFrame(dt, latest); else hideCells(); } else hud(latest);
@@ -299,7 +327,7 @@ function renderScreen() {
   const url = joinUrl(room.code);
   if (qrFor !== url) { qrFor = url; const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); $('joinUrl').textContent = url.replace(/^https?:\/\//, '').replace('/pad.html', '/…'); }
   $('scode').textContent = room.code;
-  $('smembers').innerHTML = room.members.length ? room.members.map((m) => `<li><span style="color:#${ROBOT_COLORS[m.slot].toString(16).padStart(6, '0')}">● ${esc(m.name)}${m.host ? ' 👑' : ''}</span><span class="${m.ready ? 'ready' : 'muted'}">${!m.connected ? 'offline' : m.ready ? 'PRONTO' : '…'}</span></li>`).join('') : '<li class="muted">Nessun giocatore: scansiona il QR con il telefono</li>';
+  $('smembers').innerHTML = room.members.length ? room.members.map((m) => `<li><span style="color:#${ROBOT_COLORS[m.slot].toString(16).padStart(6, '0')}">● ${esc(m.name)} <small style="opacity:.7">Lv${m.level}</small>${m.host ? ' 👑' : ''}</span><span class="${m.ready ? 'ready' : 'muted'}">${!m.connected ? 'offline' : m.ready ? 'PRONTO' : '…'}</span></li>`).join('') : '<li class="muted">Nessun giocatore: scansiona il QR con il telefono</li>';
   $('scount').textContent = `${room.members.length}/7 giocatori · ${room.phase === 'countdown' ? 'via tra ' + room.countdown + '…' : 'in attesa'}`;
   const sm = $<HTMLSelectElement>('sMap'), sd = $<HTMLSelectElement>('sMode');
   if (!sm.options.length) { sm.innerHTML = ['random', ...MAP_IDS].map((id) => `<option value="${id}">${id === 'random' ? '🎲 Mappa casuale' : '🗺️ ' + MAPS[id].name}</option>`).join(''); sd.innerHTML = MODE_IDS.map((id) => `<option value="${id}">🏁 ${MODES[id].name}</option>`).join(''); }
@@ -349,9 +377,10 @@ function splitFrame(dt: number, s: Snapshot) {
   cellEls.forEach((el, i) => (el.style.display = i < n ? 'block' : 'none'));
   slots.forEach((slot, i) => {
     const el = cellEls[i], r = cells[i], p = s.players[slot], k = `c${i}`;
-    el.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--c:${hexc(ROBOT_COLORS[slot])}`;
+    el.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--c:${hexc(cellColor(slot))}`;
     const rk = order.findIndex((o) => o.s === slot) + 1;
-    setTxt(el.children[0], k + 'n', esc(name(slot)));
+    const lv = memberOf(slot)?.level ?? 1, tn = teamsBySlot[slot] >= 0 ? ` · ${TEAM_NAMES[teamsBySlot[slot]]}` : '';
+    setTxt(el.children[0], k + 'n', `${esc(name(slot))}<small style="opacity:.75;font-weight:600"> Lv${lv}${tn}</small>`);
     setTxt(el.children[1], k + 'r', p?.fr ? '🏁 #' + p.fr : p?.al ? `#${rk}/${order.length}` : '');
     setTxt(el.children[2], k + 's', p ? (p.st > 0 ? '💫' : p.sh > 0 ? '🛡️' : p.bo > 0 ? '⚡' : p.rs > 0 ? '⌛' : '') : '');
     setTxt(el.children[3], k + 'i', p?.it ? ICON[p.it] : '');
@@ -361,16 +390,18 @@ function splitFrame(dt: number, s: Snapshot) {
     else if (p?.fr) { if (kind === 'elimination') { if (p.fr <= s.qq) { cv = `✅ QUALIFICATO!<small>#${p.fr}</small>`; cls = 'cover ok'; } else { cv = `🏁 TROPPO TARDI<small>#${p.fr}</small>`; cls = 'cover late'; } } else { cv = `🏁 TRAGUARDO!<small>#${p.fr}</small>`; cls = 'cover ok'; } }
     if (cover.className !== cls) cover.className = cls; setTxt(cover, k + 'o', cv);
     const fz = s.fz, pr = fz > 0 && p ? Math.max(0, Math.min(1, p.z / fz)) : 0;
-    setTxt(el.children[5], k + 'd', !s.sv && fz > 0 && p && p.al && !p.fr ? `🏁 ${Math.max(0, Math.round(fz - p.z))} m` : s.sv && p?.al ? `${s.players.filter((x) => x.al === 1).length} in piedi` : '');
-    (el.children[6].firstElementChild as HTMLElement).style.width = `${(s.sv ? 0 : pr) * 100}%`;
+    const crownTxt = s.cw ? `${p?.cr ? '👑 ' : ''}${(s.cs[slot] ?? 0).toFixed(1)} / ${TUNING.crownWinSeconds} s` : '';
+    setTxt(el.children[5], k + 'd', s.cw ? crownTxt : !s.sv && fz > 0 && p && p.al && !p.fr ? `🏁 ${Math.max(0, Math.round(fz - p.z))} m` : s.sv && p?.al ? `${s.players.filter((x) => x.al === 1).length} in piedi` : '');
+    (el.children[6].firstElementChild as HTMLElement).style.width = `${(s.cw ? Math.min(1, (s.cs[slot] ?? 0) / TUNING.crownWinSeconds) : s.sv ? 0 : pr) * 100}%`;
   });
   // leaderboard goes into a spare grid cell (7 players -> 8th cell, 3 players -> 4th cell)
   const bd = $('board');
   if (spare.length) { const r = spare[0]; bd.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`; bd.classList.add('cellboard'); }
   else bd.style.display = 'none';
-  setTxt(bd, 'bd', `<div class="bt">${esc(mapName)}<br/>${esc(modeName)} · Round ${s.round + 1}</div>` + order.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:${hexc(ROBOT_COLORS[p.s])}"></i><span>${esc(name(p.s))}</span><em>${p.fr ? '🏁' : p.it ? ICON[p.it] : ''}</em></div>`).join(''));
+  setTxt(bd, 'bd', `<div class="bt">${esc(mapName)}<br/>${esc(modeName)} · Round ${s.round + 1}</div>` + order.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:${hexc(cellColor(p.s))}"></i><span>${esc(name(p.s))}</span><em>${s.cw ? (s.cs[p.s] ?? 0).toFixed(1) + 's' : p.fr ? '🏁' : p.it ? ICON[p.it] : ''}</em></div>`).join(''));
   const kd = MODES[room?.options.mode ?? '']?.kind;
-  const tail = s.sv ? `${s.players.filter((x) => x.al === 1).length} in piedi` : kd === 'elimination' ? `qualificati ${s.qf}/${s.qq}` : `arrivati ${s.qf}/${n}`;
+  const holder = s.cw ? s.cw[3] : -1;
+  const tail = s.cw ? (holder >= 0 ? `👑 ${esc(name(holder))}` : '👑 libera!') : s.sv ? `${s.players.filter((x) => x.al === 1).length} in piedi` : kd === 'team' ? `${TEAM_NAMES[0]} ${teamPointsNow[0]} — ${teamPointsNow[1]} ${TEAM_NAMES[1]}` : kd === 'elimination' ? `qualificati ${s.qf}/${s.qq}` : `arrivati ${s.qf}/${n}`;
   setTxt($('hinfo'), 'hi', `Round ${s.round + 1} · ${tail} · ${s.mp === 'intermission' ? 'prossimo round' : 'tempo'} ${Math.max(0, s.left).toFixed(0)}s`);
   renderFeed(performance.now());
   $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';

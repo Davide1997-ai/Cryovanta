@@ -273,3 +273,47 @@ describe('big screen (TV) role', () => {
     expect(back.log.some((m) => m.k === 'round')).toBe(true);
   });
 });
+
+describe('profiles, looks, emotes, telemetry', () => {
+  const token = 'ab'.repeat(16);
+  const pair = (hello1?: (b: Bot) => void) => { const a = w.connect('A'), b = w.connect('B'); a.send({ k: 'create', game: GAME, isPrivate: true }); b.send({ k: 'join', code: a.room!.code }); return [a, b] as const; };
+  const play = (a: Bot, b: Bot, mode = 'race') => { a.send({ k: 'config', map: 'neon-circuit', mode }); [a, b].forEach((x) => x.send({ k: 'ready', ready: true })); w.run(60 * 60 * 10, () => !!a.matchEnd && !!b.matchEnd); };
+
+  it('a well-formed token is a persistent identity; garbage tokens get a fresh one', () => {
+    const a = w.connect('A'); a.hello(token); expect(a.token).toBe(token);
+    const b = w.connect('B'); b.hello('not-a-token'); expect(b.token).toMatch(/^[0-9a-f]{32}$/); expect(b.token).not.toBe('not-a-token');
+    expect(a.profile).toMatchObject({ level: 1, xp: 0 });
+  });
+  it('finishing a match awards XP (more for placing higher), saved on the profile and sent to the phone', () => {
+    const [a, b] = pair(); a.hello(token); play(a, b);
+    const win = a.matchEnd!.winner === a.slot ? a : b, lose = win === a ? b : a;
+    expect(a.matchEnd!.xp[win.slot]).toBeGreaterThan(a.matchEnd!.xp[lose.slot]); expect(a.matchEnd!.xp[win.slot]).toBeGreaterThanOrEqual(65);
+    expect(w.profiles.get(win.token).xp).toBe(a.matchEnd!.xp[win.slot]); expect(w.profiles.get(win.token).wins).toBe(1);
+    expect(win.gain).toBe(a.matchEnd!.xp[win.slot]); expect(win.profile!.xp).toBeGreaterThan(0);
+  });
+  it('the same token on a new connection keeps its XP (levels survive across sessions)', () => {
+    w.profiles.addMatch(token, 500, true); const a = w.connect('A'); a.hello(token); expect(a.profile!.xp).toBe(500); expect(a.profile!.level).toBeGreaterThanOrEqual(3);
+  });
+  it('look: colour is free, hats are locked by level (a forged hat is refused)', () => {
+    const [a, b] = pair(); a.send({ k: 'look', c: 9, h: 5 }); // crown hat needs level 7
+    expect(a.room!.members.find((m) => m.slot === a.slot)!.look).toEqual({ c: 9, h: 0 });
+    w.profiles.addMatch(token, 60 * 36, false); const c = w.connect('C'); c.hello(token); c.send({ k: 'join', code: a.room!.code }); b.send({ k: 'leave' });
+    c.send({ k: 'look', c: 2, h: 5 }); expect(c.room!.members.find((m) => m.slot === c.slot)!.look).toEqual({ c: 2, h: 5 });
+    c.send({ k: 'look', c: 99, h: 99 }); expect(c.room!.members.find((m) => m.slot === c.slot)!.look).toEqual({ c: 2, h: 5 }); // invalid values keep the previous look
+  });
+  it('emotes are relayed to everyone in the snapshot stream and rate-limited per player', () => {
+    const tv = w.connect('TV'); tv.send({ k: 'screen', game: GAME }); const a = w.connect('A'), b = w.connect('B'); a.send({ k: 'join', code: tv.room!.code }); b.send({ k: 'join', code: tv.room!.code });
+    tv.send({ k: 'start' }); w.run(600, () => tv.room!.phase === 'playing'); w.run(200);
+    const seen: any[] = []; const orig = (tv as any).onMsg.bind(tv); (tv as any).onMsg = (m: any) => { if (m.k === 'snap') seen.push(...m.ev.filter((e: any) => e.t === 'emote')); orig(m); };
+    a.send({ k: 'emote', id: 1 }); a.send({ k: 'emote', id: 2 }); w.run(5); b.send({ k: 'emote', id: 3 }); w.run(5);
+    expect(seen.map((e) => [e.slot, e.id])).toEqual([[a.slot, 1], [b.slot, 3]]);   // a's second emote was dropped (cooldown)
+    a.send({ k: 'emote', id: 0 }); w.run(100); a.send({ k: 'emote', id: 0 }); w.run(5); expect(seen.filter((e) => e.slot === a.slot)).toHaveLength(2); // allowed again after the cooldown
+    a.sendRaw('{"k":"emote","id":99}'); expect(a.errors).toContain('BAD_REQUEST');
+  });
+  it('every finished match writes one telemetry record with rounds, stats and standings', () => {
+    const [a, b] = pair(); play(a, b);
+    expect(w.telemetry).toHaveLength(1); const t = w.telemetry[0];
+    expect(t).toMatchObject({ mode: 'race', players: 2 }); expect(t.rounds).toHaveLength(1); expect(t.standings).toHaveLength(2); expect(t.seconds).toBeGreaterThanOrEqual(0);
+    expect(Object.keys(t.stats)).toEqual(expect.arrayContaining(['shoves', 'grabs', 'throws', 'outs', 'emotes']));
+  });
+});

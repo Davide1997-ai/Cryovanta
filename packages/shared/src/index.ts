@@ -15,3 +15,4 @@ export * from './protocol';
 export * from './snapshot';
 export * from './bot';
 export * from './prediction';
+export * from './cosmetics';

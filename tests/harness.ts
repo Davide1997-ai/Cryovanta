@@ -4,6 +4,8 @@ import {
 import { createObstacleRaceModule } from '../packages/server/src/games/obstacleRace';
 import { Client } from '../packages/server/src/hub/client';
 import { Hub } from '../packages/server/src/hub/hub';
+import { ProfileStore } from '../packages/server/src/profiles';
+import type { MatchLog } from '../packages/server/src/telemetry';
 import { timing } from '../packages/server/src/hub/room';
 
 export const TICK_MS = 1000 / 60;
@@ -12,7 +14,9 @@ export const TICK_MS = 1000 / 60;
 export class World {
   now = 1_000_000;
   seed = 4242;
-  hub = new Hub([createObstacleRaceModule(() => this.seed)], { maxRooms: 100, maxClients: 1000, clock: () => this.now });
+  profiles = new ProfileStore(null);
+  telemetry: MatchLog[] = [];
+  hub = new Hub([createObstacleRaceModule(() => this.seed)], { maxRooms: 100, maxClients: 1000, clock: () => this.now, profiles: this.profiles, telemetry: (e) => this.telemetry.push(e) });
   bots: Bot[] = [];
   constructor() { timing.startCountdownMs = 1000; timing.resultsMs = 1000; timing.reconnectGraceMs = 3000; }
   connect(name = 'bot', latencyTicks = 0): Bot {
@@ -38,6 +42,8 @@ export class Bot {
   token = '';
   predictor: Predictor | null = null;
   matchEnd: MatchEnd | null = null;
+  profile: import('@cryovanta/shared').Profile | null = null;
+  gain = 0;
   maxError = 0;
   errors_: number[] = [];
   roundsSeen = 0;
@@ -50,7 +56,7 @@ export class Bot {
     w.hub.accept(this.client);
     this.hello();
   }
-  hello(token?: string) { this.send({ k: 'hello', v: PROTOCOL_VERSION, name: this.name, token }); }
+  hello(token?: string, look?: { c: number; h: number }) { this.send({ k: 'hello', v: PROTOCOL_VERSION, name: this.name, token, look }); }
   /** Send raw text (to test malformed input). */
   sendRaw(text: string) { this.w.hub.onMessage(this.client, text); }
   send(m: ClientMsg) { this.sendRaw(JSON.stringify(m)); }
@@ -80,7 +86,8 @@ export class Bot {
   private onMsg(m: ServerMsg) {
     if (m.k !== 'snap') this.log.push(m);
     switch (m.k) {
-      case 'welcome': this.token = m.token; break;
+      case 'welcome': this.token = m.token; this.profile = m.profile; break;
+      case 'profile': this.profile = m.profile; this.gain = m.gain; break;
       case 'room': this.room = m.room; this.slot = m.you; break;
       case 'error': this.errors.push(m.code); break;
       case 'round':

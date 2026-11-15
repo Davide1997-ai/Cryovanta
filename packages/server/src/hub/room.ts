@@ -1,15 +1,17 @@
 import {
-  MAX_PLAYERS_PER_ROOM, type RoundStart, type ErrorCode, type InputFrame, type LobbyMember, type RoomInfo, type RoomPhase, type ServerMsg,
+  MAX_PLAYERS_PER_ROOM, defaultLook, type MatchEnd, type Look, type RoundStart, type ErrorCode, type InputFrame, type LobbyMember, type RoomInfo, type RoomPhase, type ServerMsg,
 } from '@cryovanta/shared';
 import type { Client } from './client';
 import type { GameHost, GameModule, GameSession } from './game';
 import { assertValidModule, type RoomOptions } from './game';
+import type { ProfileStore } from '../profiles';
+import type { TelemetrySink } from '../telemetry';
 
 /** Mutable so tests can shorten them. */
 export const timing = { startCountdownMs: 5000, resultsMs: 8000, reconnectGraceMs: 20000 };
 
 interface Member {
-  slot: number; name: string; token: string; ready: boolean;
+  slot: number; name: string; token: string; ready: boolean; look: Look; level: number;
   client: Client | null;          // null => disconnected, slot reserved until `reservedUntil`
   reservedUntil: number;
 }
@@ -34,7 +36,7 @@ export class Room {
   private lastInfoBroadcast = 0;
   onEmpty?: (room: Room) => void;
 
-  constructor(readonly code: string, readonly game: GameModule, readonly isPrivate: boolean, private clock: () => number = Date.now) { assertValidModule(game); this.options = { map: game.options.map[0], mode: game.options.mode[0] }; }
+  constructor(readonly code: string, readonly game: GameModule, readonly isPrivate: boolean, private clock: () => number = Date.now, private profiles: ProfileStore | null = null, private telemetry: TelemetrySink | null = null) { assertValidModule(game); this.options = { map: game.options.map[0], mode: game.options.mode[0] }; }
 
   // ------------------------------------------------------------ big screens
   static readonly MAX_DISPLAYS = 3;
@@ -64,7 +66,7 @@ export class Room {
     if (this.phase === 'playing' || this.phase === 'results') return { ok: false, code: 'ROOM_IN_PROGRESS', msg: 'Match already running' };
     const slot = this.slots.findIndex((m, i) => m === null && i < this.capacity);
     if (this.size >= this.capacity || slot < 0) return { ok: false, code: 'ROOM_FULL', msg: `Room is full (${this.capacity}/${this.capacity})` };
-    this.slots[slot] = { slot, name: client.name, token: client.token, ready: false, client, reservedUntil: 0 };
+    this.slots[slot] = { slot, name: client.name, token: client.token, ready: false, client, reservedUntil: 0, look: client.look ?? defaultLook(slot), level: client.level };
     client.room = this; client.slot = slot;
     if (this.size > this.capacity) throw new Error('invariant violated: room over capacity');
     this.cancelCountdown();
@@ -146,11 +148,33 @@ export class Room {
       sendPlayers: (msg) => this.broadcast(msg, 'players'),
       sendDisplays: (msg) => this.broadcast(msg, 'displays'),
       get displayCount() { return self.displays.size; },
+      telemetry: (e) => this.telemetry?.(e),
     };
     this.session = this.game.createSession(host);
     this.phase = 'playing';
     this.broadcastRoom();
     this.session.start(slots, { ...this.options });
+  }
+
+  /** The player changed colour/hat in the lobby. */
+  updateLook(client: Client) {
+    const m = this.slots[client.slot]; if (!m || m.client !== client || !client.look) return;
+    m.look = client.look; this.broadcastRoom();
+  }
+  handleEmote(client: Client, id: number) {
+    const m = this.slots[client.slot];
+    if (this.phase === 'playing' && m && m.client === client) this.session?.handleEmote?.(client.slot, id);
+  }
+  /** Persist XP when a match ends and tell each phone what it earned. */
+  private awardXp(end: MatchEnd) {
+    if (!this.profiles) return;
+    for (const m of this.slots) {
+      if (!m || !m.token) continue;
+      const gain = end.xp[m.slot] ?? 0; if (gain <= 0) continue;
+      const profile = this.profiles.addMatch(m.token, gain, end.winner === m.slot);
+      if (m.client) { m.client.level = profile.level; m.client.send({ k: 'profile', profile, gain }); }
+      m.level = profile.level;
+    }
   }
 
   // ------------------------------------------------------------ in-game
@@ -183,7 +207,7 @@ export class Room {
   info(): RoomInfo {
     const host = this.slots.findIndex((m) => m !== null);
     const members: LobbyMember[] = [];
-    for (const m of this.slots) if (m) members.push({ slot: m.slot, name: m.name, ready: m.ready, host: m.slot === host, connected: !!m.client });
+    for (const m of this.slots) if (m) members.push({ slot: m.slot, name: m.name, ready: m.ready, host: m.slot === host, connected: !!m.client, look: m.look, level: m.level });
     return {
       code: this.code, game: this.game.id, phase: this.phase, isPrivate: this.isPrivate, capacity: this.capacity, members, options: this.options, displays: this.displays.size,
       countdown: this.phase === 'countdown' ? Math.max(0, Math.ceil((this.countdownEnds - this.clock()) / 1000)) : 0,
@@ -197,6 +221,7 @@ export class Room {
   }
   broadcast(msg: ServerMsg, to: 'all' | 'players' | 'displays' = 'all') {
     if (msg.k === 'round') this.lastRound = msg;
+    if (msg.k === 'matchEnd') this.awardXp(msg);
     const json = JSON.stringify(msg); // serialise once for all recipients
     const droppable = msg.k === 'snap';
     if (to !== 'displays') for (const m of this.slots) m?.client?.sendRaw(json, droppable);

@@ -5,7 +5,8 @@
 import type { PlayerState } from './types';
 
 export type ImpactKind = 'seeker' | 'hazard' | 'dive' | 'obstacle' | 'shove' | 'bump';
-export interface ImpactSource { kind: ImpactKind; owner: number; x: number; y: number; z: number; vx: number; vz: number; /** scales the knockback (ramming speed) */ power?: number; }
+export interface ImpactSource { kind: ImpactKind; owner: number; x: number; y: number; z: number; vx: number; vz: number; /** scales the knockback (ramming speed) */ power?: number;
+  /** team round: teammates are immune to shoves, bumps, dives, grabs and homing drones */ ownerTeam?: number; }
 /** hit: knocked/stunned · blocked: shield ate it · smashed: boosting robot shattered the hazard · ignored: no contact effect */
 export type ImpactOutcome = 'hit' | 'blocked' | 'smashed' | 'ignored';
 export interface ImpactResult { outcome: ImpactOutcome; consumeSource: boolean; }
@@ -24,6 +25,7 @@ export function resolveImpact(src: ImpactSource, t: PlayerState): ImpactResult {
   if (!t.alive || t.respawn > 0 || t.finishRank > 0) return { outcome: 'ignored', consumeSource: false };
   // 2) never hit yourself with homing/dive (own hazards are handled by the hazard grace timer)
   if (t.slot === src.owner && src.kind !== 'hazard') return { outcome: 'ignored', consumeSource: false };
+  if (src.ownerTeam !== undefined && src.ownerTeam >= 0 && src.ownerTeam === t.team && src.kind !== 'hazard' && src.kind !== 'obstacle') return { outcome: 'ignored', consumeSource: false };
   const prof = PROFILE[src.kind];
   // direction: along projectile travel if it has velocity, else from source to victim
   let dx = t.x - src.x, dz = t.z - src.z;
