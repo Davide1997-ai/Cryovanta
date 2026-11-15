@@ -29,5 +29,5 @@ export function botInput(p: PlayerState, course: Course, tick: number, seq: numb
   else if (p.vy > -0.1 && !p.hovering) jump = false; // 1-tick release near the apex => fresh press = hover edge
   else jump = p.hoverFuel > 0.05 && ((p.hovering && toEdge < 3) || (toEdge < 2.5 && p.y < nearTop + 0.3)); // burn thruster only while below the target ledge
   if (p.grounded && p.jumpHeld) jump = false; // need a fresh press edge to take off
-  return { seq, mx, mz, jump, dive: false, use: !!opts.useItems && !!p.item && tick % 45 === 0 };
+  return { seq, mx, mz, jump, dive: false, push: false, grab: false, use: !!opts.useItems && !!p.item && tick % 45 === 0 };
 }

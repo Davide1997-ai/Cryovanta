@@ -2,7 +2,7 @@ import { buildCourse } from './course';
 import { nextRand, rangeRand } from './rng';
 import type { Course, CourseHazard, ItemBoxDef, Platform, Surface, Theme, WindZone } from './types';
 
-export interface MapDef { id: string; name: string; desc: string; theme: Theme; build(seed: number, difficulty: number): Course; }
+export interface MapDef { id: string; name: string; desc: string; theme: Theme; /** race = reach the finish line; survival = last robot standing */ kind: 'race' | 'survival'; build(seed: number, difficulty: number): Course; }
 
 /** Small builder kit shared by the "giant obstacle park" maps. Cursor `z` = leading edge of the last slab. */
 class Kit {
@@ -147,12 +147,37 @@ function buildPark(mapId: string, theme: Theme, pool: Seg[], seed: number, diffi
   return { seed, platforms: k.platforms, checkpoints: k.checkpoints, boxes: k.boxes, finishZ: gz - 4, killY: -22, spawnPoints, length: gz, mapId, theme, hazards: k.hazards, zones: k.zones };
 }
 
+/**
+ * Survival arena: a grid of tiles that collapse in waves from the outside in (a pure function of time, so the
+ * server and every client agree). Two crossing sweeper bars in the middle. Falling = out. Shove people off!
+ */
+function buildArena(seed: number, d: number): Course {
+  const r = { rng: seed >>> 0 }, platforms: Platform[] = [], boxes: ItemBoxDef[] = [], N = 7, size = 6, pitch = size + 0.3, mid = (N - 1) / 2;
+  const waves = [26, 46, 66, 86].map((t) => t * (1 - 0.22 * d)); // ring 3 (outer) collapses first, ring 0 (centre) last
+  let pid = 0;
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const ring = Math.max(Math.abs(i - mid), Math.abs(j - mid));
+    platforms.push({ id: pid++, kind: 'static', x: (i - mid) * pitch, y: -0.6, z: (j - mid) * pitch, hx: size / 2, hy: 0.6, hz: size / 2, ax: 0, ay: 0, az: 0, period: 1, phase: 0, hue: (i + j) % 6, surface: 'normal', skin: (i + j) % 2 ? 2 : 1, vanishAt: 3 + waves[(N - 1) / 2 - ring] + rangeRand(r, -6, 6) });
+  }
+  const spawnPoints: Course['spawnPoints'] = [];
+  for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; spawnPoints.push([Math.sin(a) * 11, 0, Math.cos(a) * 11]); }
+  for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2 + 0.2; boxes.push({ id: k, x: Math.sin(a) * 7, y: 1.1, z: Math.cos(a) * 7 }); }
+  const hazards: CourseHazard[] = [
+    { id: 0, kind: 'spinner', x: 0, y: 0.5, z: 0, len: 40, radius: 0.35, speed: 0.8 + 0.5 * d, period: 1, phase: 0, dir: 1 },
+    { id: 1, kind: 'spinner', x: 0, y: 0.5, z: 0, len: 20, radius: 0.35, speed: 1.3 + 0.5 * d, period: 1, phase: 1, dir: -1 },
+  ];
+  return { seed, platforms, checkpoints: [{ z: -1000, spawn: [0, 0, 0] }], boxes, finishZ: 1e9, killY: -16, spawnPoints, length: 60, mapId: 'platform-panic', survival: true, theme: 'sunny', hazards, zones: [] };
+}
+
 export const MAPS: Record<string, MapDef> = {
-  'neon-circuit': { id: 'neon-circuit', name: 'Neon Circuit', desc: 'Piattaforme sospese nello spazio. Veloce e tecnica.', theme: 'neon', build: (seed, d) => buildCourse(seed, d, 4 + Math.round(d / 0.35)) },
-  'titan-gauntlet': { id: 'titan-gauntlet', name: 'Titan Gauntlet', desc: 'Un parco giochi gigante: barre rotanti, martelli, rulli, trampolini, vento e pavimenti che spariscono.', theme: 'sunny', build: (seed, d) => buildPark('titan-gauntlet', 'sunny', POOLS.titan, seed, d, 13 + Math.round(d * 4), 8) },
-  'frost-run': { id: 'frost-run', name: 'Frost Run', desc: 'Pista ghiacciata: derapate, bufere laterali e pendoli.', theme: 'frost', build: (seed, d) => buildPark('frost-run', 'frost', POOLS.frost, seed, d, 8 + Math.round(d * 3), 7) },
+  'neon-circuit': { id: 'neon-circuit', name: 'Neon Circuit', desc: 'Piattaforme sospese nello spazio. Veloce e tecnica.', theme: 'neon', kind: 'race', build: (seed, d) => buildCourse(seed, d, 4 + Math.round(d / 0.35)) },
+  'titan-gauntlet': { id: 'titan-gauntlet', name: 'Titan Gauntlet', desc: 'Un parco giochi gigante: barre rotanti, martelli, rulli, trampolini, vento e pavimenti che spariscono.', theme: 'sunny', kind: 'race', build: (seed, d) => buildPark('titan-gauntlet', 'sunny', POOLS.titan, seed, d, 9 + Math.round(d * 3), 8) },
+  'frost-run': { id: 'frost-run', name: 'Frost Run', desc: 'Pista ghiacciata: derapate, bufere laterali e pendoli.', theme: 'frost', kind: 'race', build: (seed, d) => buildPark('frost-run', 'frost', POOLS.frost, seed, d, 7 + Math.round(d * 3), 7) },
+  'platform-panic': { id: 'platform-panic', name: 'Platform Panic', desc: 'Arena a tessere che crollano dall\'esterno: spingi gli altri giù, resta in piedi!', theme: 'sunny', kind: 'survival', build: buildArena },
 };
 export const MAP_IDS = Object.keys(MAPS);
+export const RACE_MAP_IDS = MAP_IDS.filter((id) => MAPS[id].kind === 'race');
+export const SURVIVAL_MAP_IDS = MAP_IDS.filter((id) => MAPS[id].kind === 'survival');
 
 export function buildMap(mapId: string, seed: number, difficulty: number): Course {
   const m = MAPS[mapId] ?? MAPS['neon-circuit'];

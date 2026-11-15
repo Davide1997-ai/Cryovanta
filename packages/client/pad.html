@@ -2,14 +2,17 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="theme-color" content="#070816" />
   <title>Cryovanta — Joypad</title>
   <style>
-    :root { --neon:#00e5ff; --pink:#ff3df2; --bg:#070816; --me:#00e5ff; }
+    :root { --neon:#00e5ff; --pink:#ff3df2; --bg:#070816; --me:#00e5ff; --u: min(1vh, 1.7vw); }
+    @supports (height: 100dvh) { :root { --u: min(1dvh, 1.7vw); } }
     * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-    html, body { margin:0; height:100%; background:radial-gradient(120% 120% at 50% 0%, #1a1450 0%, var(--bg) 60%); color:#e8f0ff; font-family: ui-rounded, "Segoe UI", system-ui, sans-serif; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
-    .screen { position:fixed; inset:0; padding:max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+    html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+    html, body { margin:0; height:100%; width:100%; position:fixed; inset:0; background:radial-gradient(120% 120% at 50% 0%, #1a1450 0%, var(--bg) 60%); color:#e8f0ff; font-family: ui-rounded, "Segoe UI", system-ui, sans-serif; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
+    * { touch-action:none; } input, select { touch-action:manipulation; }
+    .screen { position:fixed; inset:0; height:100%; padding:max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
     .hidden { display:none !important; }
     h1 { margin:0; font-size:26px; letter-spacing:.06em; text-shadow:0 0 14px var(--neon); text-align:center; } h1 small { display:block; font-size:11px; letter-spacing:.28em; color:var(--pink); text-shadow:0 0 10px var(--pink); }
     input, select { font:inherit; font-size:18px; width:min(420px,100%); padding:13px 14px; border-radius:14px; border:1px solid rgba(0,229,255,.55); background:rgba(0,229,255,.08); color:inherit; user-select:text; -webkit-user-select:text; }
@@ -24,22 +27,25 @@
     #plist li { display:flex; justify-content:space-between; padding:8px 12px; border-radius:12px; background:rgba(255,255,255,.06); } #plist .ok { color:#7cff3a; }
     /* ---------- controller ---------- */
     #play { padding:0; display:block; }
-    #hudTop { position:absolute; left:0; right:0; top:max(8px, env(safe-area-inset-top)); display:flex; justify-content:space-between; align-items:center; padding:0 max(18px, env(safe-area-inset-left)); font-weight:800; font-size:20px; pointer-events:none; text-shadow:0 0 10px var(--me); }
+    #hudTop { position:absolute; left:0; right:0; top:max(4px, env(safe-area-inset-top)); display:flex; justify-content:space-between; align-items:center; padding:0 max(14px, env(safe-area-inset-left)); font-weight:800; font-size:calc(var(--u)*5); pointer-events:none; text-shadow:0 0 10px var(--me); }
     #who { display:flex; align-items:center; gap:10px; } #who i { width:16px; height:16px; border-radius:50%; background:var(--me); box-shadow:0 0 12px var(--me); }
     #stickZone { position:absolute; left:0; top:14%; bottom:0; width:56%; touch-action:none; }
     #stickHint { position:absolute; left:calc(8% + env(safe-area-inset-left)); top:55%; width:34%; text-align:center; font-size:15px; opacity:.45; pointer-events:none; }
-    #stickBase { display:none; position:fixed; width:144px; height:144px; margin:-72px 0 0 -72px; border-radius:50%; border:3px solid rgba(255,255,255,.55); background:radial-gradient(circle, color-mix(in srgb, var(--me) 35%, transparent), rgba(255,255,255,.05)); box-shadow:0 0 22px var(--me); pointer-events:none; }
-    #stickKnob { position:absolute; left:50%; top:50%; width:62px; height:62px; border-radius:50%; transform:translate(-50%,-50%); background:var(--me); box-shadow:0 0 18px var(--me), inset 0 0 12px rgba(255,255,255,.45); }
-    #ring { position:absolute; left:calc(14% + env(safe-area-inset-left)); top:50%; width:150px; height:150px; margin-top:-62px; border-radius:50%; border:2px dashed rgba(0,229,255,.55); background:rgba(0,229,255,.07); pointer-events:none; }
+    #stickBase { display:none; position:fixed; width:calc(var(--u)*32); height:calc(var(--u)*32); margin:calc(var(--u)*-16) 0 0 calc(var(--u)*-16); border-radius:50%; border:3px solid rgba(255,255,255,.55); background:radial-gradient(circle, color-mix(in srgb, var(--me) 35%, transparent), rgba(255,255,255,.05)); box-shadow:0 0 22px var(--me); pointer-events:none; }
+    #stickKnob { position:absolute; left:50%; top:50%; width:calc(var(--u)*14); height:calc(var(--u)*14); border-radius:50%; transform:translate(-50%,-50%); background:var(--me); box-shadow:0 0 18px var(--me), inset 0 0 12px rgba(255,255,255,.45); }
+    #ring { position:absolute; left:calc(14% + env(safe-area-inset-left)); top:50%; width:calc(var(--u)*34); height:calc(var(--u)*34); margin-top:calc(var(--u)*-17); border-radius:50%; border:2px dashed rgba(0,229,255,.55); background:rgba(0,229,255,.07); pointer-events:none; }
     #dot { position:absolute; left:50%; top:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%; background:var(--me); box-shadow:0 0 18px var(--me); }
     #ringLbl { position:absolute; left:calc(14% + env(safe-area-inset-left)); width:150px; top:calc(50% + 100px); text-align:center; font-size:12px; opacity:.7; pointer-events:none; }
-    .tb { position:absolute; border-radius:50%; display:grid; place-items:center; font-weight:900; letter-spacing:.05em; border:3px solid var(--neon); background:rgba(0,10,30,.55); box-shadow:0 0 22px rgba(0,229,255,.5); touch-action:none; }
-    .tb.on { background:rgba(0,229,255,.6); transform:scale(.94); }
-    #bJump { right:calc(22px + env(safe-area-inset-right)); bottom:calc(24px + env(safe-area-inset-bottom)); width:132px; height:132px; font-size:22px; }
-    #bDive { right:calc(170px + env(safe-area-inset-right)); bottom:calc(20px + env(safe-area-inset-bottom)); width:88px; height:88px; font-size:14px; border-color:var(--pink); box-shadow:0 0 18px rgba(255,61,242,.5); }
-    #bItem { right:calc(60px + env(safe-area-inset-right)); bottom:calc(170px + env(safe-area-inset-bottom)); width:96px; height:96px; font-size:38px; border-color:#ffb020; box-shadow:0 0 20px rgba(255,176,32,.55); }
+    .tb { position:absolute; border-radius:50%; display:grid; place-items:center; text-align:center; line-height:1.05; font-weight:900; letter-spacing:.04em; border:calc(var(--u)*.9) solid var(--neon); background:rgba(0,10,30,.6); box-shadow:0 0 calc(var(--u)*5) rgba(0,229,255,.5); touch-action:none; padding:0; color:#e8f0ff; }
+    .tb.on { background:rgba(0,229,255,.6); transform:scale(.93); }
+    /* every size is a multiple of the REAL page height (dvh) so the cluster always fits, whatever the browser bars take */
+    #bJump { right:calc(var(--u)*3 + env(safe-area-inset-right)); bottom:calc(var(--u)*4 + env(safe-area-inset-bottom)); width:calc(var(--u)*36); height:calc(var(--u)*36); font-size:calc(var(--u)*5.4); }
+    #bPush { right:calc(var(--u)*44 + env(safe-area-inset-right)); bottom:calc(var(--u)*4 + env(safe-area-inset-bottom)); width:calc(var(--u)*30); height:calc(var(--u)*30); font-size:calc(var(--u)*4.2); border-color:#ff8a3d; box-shadow:0 0 calc(var(--u)*5) rgba(255,138,61,.55); }
+    #bDive { right:calc(var(--u)*6 + env(safe-area-inset-right)); bottom:calc(var(--u)*46 + env(safe-area-inset-bottom)); width:calc(var(--u)*26); height:calc(var(--u)*26); font-size:calc(var(--u)*3.6); border-color:var(--pink); box-shadow:0 0 calc(var(--u)*5) rgba(255,61,242,.5); }
+    #bGrab { right:calc(var(--u)*40 + env(safe-area-inset-right)); bottom:calc(var(--u)*38 + env(safe-area-inset-bottom)); width:calc(var(--u)*26); height:calc(var(--u)*26); font-size:calc(var(--u)*3.4); border-color:#7cff3a; box-shadow:0 0 calc(var(--u)*5) rgba(124,255,58,.5); }
+    #bItem { right:calc(var(--u)*70 + env(safe-area-inset-right)); bottom:calc(var(--u)*38 + env(safe-area-inset-bottom)); width:calc(var(--u)*24); height:calc(var(--u)*24); font-size:calc(var(--u)*9); border-color:#ffb020; box-shadow:0 0 calc(var(--u)*5) rgba(255,176,32,.55); }
     .mini { position:absolute; padding:8px 12px; font-size:12px; border-radius:12px; border-width:1px; box-shadow:none; } #modeBtn { left:calc(16px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); } #calBtn { left:calc(150px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); }
-    #banner { position:absolute; left:50%; top:30%; transform:translate(-50%,-50%); font-size:60px; font-weight:900; text-shadow:0 0 28px var(--pink); pointer-events:none; text-align:center; }
+    #banner { position:absolute; left:50%; top:32%; transform:translate(-50%,-50%); font-size:calc(var(--u)*14); font-weight:900; text-shadow:0 0 28px var(--pink); pointer-events:none; text-align:center; }
     #rot { position:fixed; inset:0; z-index:9; background:rgba(7,8,22,.96); display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px; font-size:20px; text-align:center; padding:30px; }
     @media (max-height: 520px) {
       #wait { gap:8px; } #wait .swatch { display:none; } #wait h1 { font-size:22px; }
@@ -69,16 +75,16 @@
     <ul id="plist"></ul>
     <div id="cfgRow" class="hidden" style="display:flex; gap:8px; width:min(420px,100%)"><select id="selMap"></select><select id="selMode"></select></div>
     <button id="ready" class="big">PRONTO!</button>
-    <div style="display:flex; gap:10px"><button id="calib">⟲ Centra</button><button id="leave">Esci</button></div>
+    <div style="display:flex; gap:10px"><button id="leave">Esci</button></div>
     <div id="werr" class="err"></div>
   </div>
 
   <div id="play" class="screen hidden">
-    <div id="hudTop"><div id="who"><i></i><span id="pname"></span></div><div id="rank">#–</div><div id="status"></div></div>
+    <div id="hudTop"><div id="who"><i></i><span id="pname"></span></div><div id="rank">#–</div><div id="dist"></div><div id="status"></div></div>
     <div id="stickZone"></div>
     <div id="stickHint">☝️ tocca e trascina qui per muoverti</div><div id="stickBase"><div id="stickKnob"></div></div>
     <div id="ring"><div id="dot"></div></div><div id="ringLbl">inclina per muoverti</div>
-    <div class="tb" id="bItem">🎁</div><div class="tb" id="bDive">TUFFO</div><div class="tb" id="bJump">SALTA</div>
+    <div class="tb" id="bItem">🎁</div><div class="tb" id="bGrab">AFFERRA</div><div class="tb" id="bDive">TUFFO</div><div class="tb" id="bPush">SPINGI</div><div class="tb" id="bJump">SALTA</div>
     <button class="mini" id="modeBtn">📱 Inclinazione (beta)</button><button class="mini" id="calBtn">⟲ Centra</button>
     <div id="banner"></div>
   </div>

@@ -139,9 +139,13 @@ export class Room {
 
   private startMatch() {
     const slots = this.connected().map((m) => m.slot);
+    const self = this;
     const host: GameHost = {
       send: (slot, msg) => this.slots[slot]?.client?.send(msg, msg.k === 'snap'),
       broadcast: (msg) => this.broadcast(msg),
+      sendPlayers: (msg) => this.broadcast(msg, 'players'),
+      sendDisplays: (msg) => this.broadcast(msg, 'displays'),
+      get displayCount() { return self.displays.size; },
     };
     this.session = this.game.createSession(host);
     this.phase = 'playing';
@@ -191,12 +195,12 @@ export class Room {
     for (const m of this.slots) m?.client?.send({ k: 'room', room: info, you: m.slot });
     for (const d of this.displays) d.send({ k: 'room', room: info, you: -1 });
   }
-  broadcast(msg: ServerMsg) {
+  broadcast(msg: ServerMsg, to: 'all' | 'players' | 'displays' = 'all') {
     if (msg.k === 'round') this.lastRound = msg;
     const json = JSON.stringify(msg); // serialise once for all recipients
     const droppable = msg.k === 'snap';
-    for (const m of this.slots) m?.client?.sendRaw(json, droppable);
-    for (const d of this.displays) d.sendRaw(json, droppable);
+    if (to !== 'displays') for (const m of this.slots) m?.client?.sendRaw(json, droppable);
+    if (to !== 'players') for (const d of this.displays) d.sendRaw(json, droppable);
   }
   sendCurrent(client: Client) {
     client.send({ k: 'room', room: this.info(), you: client.slot });

@@ -8,8 +8,10 @@ export interface InputFrame {
   jump: boolean; // held
   dive: boolean; // edge-detected by the sim
   use: boolean; // item use, edge-detected by the sim
+  push: boolean; // shove (edge-detected): knocks back whoever is in front
+  grab: boolean; // hold: grab the robot in front and drag it
 }
-export const NEUTRAL_INPUT: InputFrame = { seq: 0, mx: 0, mz: 0, jump: false, dive: false, use: false };
+export const NEUTRAL_INPUT: InputFrame = { seq: 0, mx: 0, mz: 0, jump: false, dive: false, use: false, push: false, grab: false };
 
 export interface PlayerState {
   slot: number;
@@ -40,6 +42,11 @@ export interface PlayerState {
   finishedAt: number; // tick, -1 if not finished
   finishRank: number; // 0 = not finished
   alive: boolean; // false: eliminated / left (not simulated)
+  // --- dirty play ---
+  pushCd: number; pushing: number; pushHeld: boolean; pushReq: boolean; // shove (pushReq is a one-tick request consumed by the sim)
+  grabHeld: boolean; grabbing: number; grabCd: number; grabTarget: number; // -1 = none
+  slow: number;     // seconds of "being held / dragged": slower, cannot jump
+  outAt: number;    // survival rounds: tick of elimination, -1 while alive
 }
 
 export type PlatformKind = 'static' | 'mover' | 'piston' | 'blink';
@@ -55,6 +62,7 @@ export interface Platform {
   period: number; phase: number;
   /** cosmetic palette index for the neon trim */
   hue: number;
+  vanishAt?: number;       // survival arenas: second (sim time) when this tile collapses for good
   surface?: Surface;       // default 'normal'
   flowX?: number; flowZ?: number; // conveyor belt speed (u/s)
   duty?: number;           // 'blink' tiles: fraction of the period they are solid
@@ -91,6 +99,8 @@ export interface Course {
   spawnPoints: [number, number, number][]; // 7 slots
   length: number;
   mapId: string;
+  /** survival arenas have no finish line: last robot standing wins and falling = elimination */
+  survival?: boolean;
   theme: Theme;
   hazards: CourseHazard[];
   zones: WindZone[];

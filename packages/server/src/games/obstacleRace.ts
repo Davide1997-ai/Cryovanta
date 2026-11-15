@@ -6,8 +6,8 @@ import type { GameHost, GameModule, GameSession, RoomOptions } from '../hub/game
 
 /** If a client's input queue runs dry we repeat its last frame this many ticks before falling back to neutral. */
 const STARVE_REPEAT_TICKS = 6;
-/** Input jitter buffer: up to ~130 ms of queued frames is normal on Wi-Fi; beyond that we skip ahead. */
-const SKIP_AHEAD_AT = 8, KEEP_AFTER_SKIP = 3;
+/** Input jitter buffer: ~80 ms of queued frames is the most we tolerate (every extra queued frame = extra input lag); beyond that we skip ahead. */
+const SKIP_AHEAD_AT = 5, KEEP_AFTER_SKIP = 2;
 
 /**
  * Authoritative "Neon Circuit" session.
@@ -67,15 +67,19 @@ export class ObstacleRaceSession implements GameSession {
     }
     const simBefore = this.match.sim, tickBefore = simBefore.tick;
     this.match.step(inputs);
-    if (this.match.sim === simBefore && simBefore.tick !== tickBefore) this.evBuf.push(...simBefore.events);
+    const stepped = this.match.sim === simBefore && simBefore.tick !== tickBefore;
+    const evTick = stepped ? [...simBefore.events] : [];
+    if (stepped) this.evBuf.push(...evTick);
 
     if (this.match.roundIdx !== this.announcedRound) this.announceRound();
     if (this.match.lastResult && this.resultSent !== this.match.lastResult) {
       this.resultSent = this.match.lastResult; // identity: each round result is announced exactly once
       this.host.broadcast({ k: 'roundEnd', qualified: this.match.lastResult.qualified, eliminated: this.match.lastResult.eliminated });
     }
+    // Big screens have no prediction, so they get state on EVERY tick (60 Hz); players/phones every SNAPSHOT_EVERY ticks.
+    if (this.host.displayCount > 0) this.host.sendDisplays(buildSnapshot(this.match, this.ack, evTick));
     if (++this.ticks % SNAPSHOT_EVERY === 0) {
-      this.host.broadcast(buildSnapshot(this.match, this.ack, this.evBuf));
+      this.host.sendPlayers(buildSnapshot(this.match, this.ack, this.evBuf));
       this.evBuf = [];
     }
     if (this.match.phase === 'over') {

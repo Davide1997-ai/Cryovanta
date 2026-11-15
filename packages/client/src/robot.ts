@@ -21,6 +21,7 @@ export class Robot {
   private armL!: THREE.Mesh; private armR!: THREE.Mesh;
   private flame!: THREE.Mesh; private shield!: THREE.Mesh; private trail!: THREE.Mesh; private stars = new THREE.Group();
   private small: THREE.Object3D[] = [];
+  private lieT = 0; private lean = 0;
   private sq = 0; private sqV = 0; private wasGrounded = true; private lastVy = 0; private t = Math.random() * 10;
 
   constructor(readonly slot: number) {
@@ -72,9 +73,16 @@ export class Robot {
     this.sqV += ((target - this.sq) * 220 - this.sqV * 16) * dt; this.sq += this.sqV * dt;
     const sy = 1 + this.sq, sxz = 1 - this.sq * 0.55;
     this.body.scale.set(sxz, sy, sxz);
-    this.body.rotation.x = Math.min(1, speed / 9) * 0.28 + (s.dv > 0 ? 0.9 : 0);
+    // stumble: a hit robot falls over backwards and scrambles up again (the Stumble Guys wobble)
+    this.lieT += ((s.st > 0.12 ? 1 : 0) - this.lieT) * (1 - Math.exp(-14 * dt));
+    const shoving = s.ph > 0, grabbing = s.gb > 0, held = s.sl > 0;
+    const lean = Math.min(1, speed / 9) * 0.28 + (s.dv > 0 ? 0.9 : 0) + (shoving ? 0.35 : 0);
+    this.body.rotation.x = lean - this.lieT * 1.35; this.body.rotation.z = Math.sin(this.t * 24) * 0.12 * this.lieT + (held ? Math.sin(this.t * 18) * 0.12 : 0);
+    this.body.position.y = -this.lieT * 0.18;
     const swing = grounded ? Math.sin(this.t * 16) * Math.min(1, speed / 6) * 0.9 : -0.8;
-    this.armL.rotation.x = swing; this.armR.rotation.x = -swing;
+    if (shoving || grabbing) { this.armL.rotation.x = this.armR.rotation.x = -1.55 + (shoving ? Math.sin(this.t * 50) * 0.15 : 0); }
+    else if (this.lieT > 0.3) { this.armL.rotation.x = Math.sin(this.t * 22) * 1.2; this.armR.rotation.x = -Math.sin(this.t * 22) * 1.2; }
+    else { this.armL.rotation.x = swing; this.armR.rotation.x = -swing; }
     this.head.rotation.z = s.st > 0 ? Math.sin(this.t * 22) * 0.35 : 0;
     this.head.position.y = 0.97 + Math.sin(this.t * 3) * 0.008;
     this.flame.visible = s.hv === 1; this.flame.scale.y = 0.8 + Math.random() * 0.5;

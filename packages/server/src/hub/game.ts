@@ -6,6 +6,10 @@ export interface RoomOptions { map: string; mode: string; }
 export interface GameHost {
   send(slot: number, msg: ServerMsg): void;
   broadcast(msg: ServerMsg): void;
+  /** players only / big screens only (screens get a faster state stream: they have no prediction) */
+  sendPlayers(msg: ServerMsg): void;
+  sendDisplays(msg: ServerMsg): void;
+  readonly displayCount: number;
 }
 
 export interface GameSession {

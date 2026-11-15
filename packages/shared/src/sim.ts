@@ -13,7 +13,10 @@ export type SimEvent =
   | { t: 'use'; slot: number; item: ItemKind }
   | { t: 'impact'; kind: ImpactKind; victim: number; owner: number; outcome: ImpactOutcome }
   | { t: 'finish'; slot: number; rank: number }
-  | { t: 'fall'; slot: number };
+  | { t: 'fall'; slot: number }
+  | { t: 'out'; slot: number }                       // survival: eliminated
+  | { t: 'grab'; slot: number; victim: number }      // grabbed someone
+  | { t: 'release'; slot: number; victim: number; thrown: boolean };
 
 export interface RaceConfig { seed: number; round: number; participants: number[]; qualify: number; mapId: string; difficulty: number; boxRespawn: number; }
 export interface RaceResult { qualified: number[]; eliminated: number[]; reason: 'qualified' | 'timeout' | 'empty'; }
@@ -35,6 +38,9 @@ export class RaceSim {
   rng: number;
   private nextId = 1;
   private finishCounter = 0;
+  /** how many robots already crossed the finish line */
+  get finishers() { return this.finishCounter; }
+  get survival() { return !!this.course.survival; }
   private hazardCarry = new Map<number, { v: number }>();
   /** last frame actually consumed per slot (for ack + repeat-last on starvation) is kept by the server session. */
 
@@ -48,7 +54,7 @@ export class RaceSim {
       p.grounded = true;
       this.players.push(p);
     }
-    const roundSeconds = 40 + this.course.length * 0.45;
+    const roundSeconds = this.course.survival ? 120 : 40 + this.course.length * 0.45;
     this.roundTicksLeft = Math.round(roundSeconds * TICK_RATE);
     this.computeRanks();
   }
@@ -74,7 +80,10 @@ export class RaceSim {
       const raw = p.finishRank > 0 ? NEUTRAL_INPUT : inputs[p.slot] ? sanitizeInput(inputs[p.slot]!) : NEUTRAL_INPUT;
       const wasDown = p.respawn > 0;
       stepPlayer(p, raw, this.course, this.tick);
-      if (!wasDown && p.respawn > 0) this.events.push({ t: 'fall', slot: p.slot });
+      if (!wasDown && p.respawn > 0) {
+        if (this.course.survival) { this.eliminate(p); continue; } // falling is final in survival rounds
+        this.events.push({ t: 'fall', slot: p.slot });
+      }
       const useEdge = raw.use && !p.useHeld;
       p.useHeld = raw.use;
       if (useEdge && p.item && p.stun <= 0 && p.respawn <= 0 && p.finishRank === 0) this.useItem(p);
@@ -84,6 +93,8 @@ export class RaceSim {
     this.stepSeekers();
     this.stepHazards();
     this.obstacles();
+    this.shoves();
+    this.grabs();
     this.contacts();
     this.checkFinish();
     this.checkEnd();
@@ -197,6 +208,66 @@ export class RaceSim {
     }
   }
 
+  // ------------------------------------------------------------------ dirty play
+  private ok(q: PlayerState) { return q.alive && q.respawn <= 0 && q.finishRank === 0; }
+
+  /** Shove button: knocks back everyone in a short cone in front. Pressing it while holding someone THROWS them. */
+  private shoves() {
+    for (const p of this.players) {
+      if (!p.alive || !p.pushReq) continue;
+      p.pushReq = false;
+      const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw);
+      if (p.grabTarget >= 0) { // throw
+        const q = this.players[p.grabTarget], thrown = this.ok(q);
+        this.releaseGrab(p);
+        if (thrown) {
+          q.vx = fx * 15; q.vz = fz * 15; q.vy = 6.5; q.stun = 0.7; q.invuln = 0.5; q.slow = 0; q.grounded = false; q.platformId = -1; q.hovering = false;
+          this.events.push({ t: 'release', slot: p.slot, victim: q.slot, thrown: true }, { t: 'impact', kind: 'shove', victim: q.slot, owner: p.slot, outcome: 'hit' });
+        }
+        continue;
+      }
+      for (const q of this.players) {
+        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1) continue;
+        const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
+        if (d > T.pushRange || d < 1e-3 || (dx * fx + dz * fz) / d < 0.35) continue;
+        const res = resolveImpact({ kind: 'shove', owner: p.slot, x: p.x, y: p.y, z: p.z, vx: fx, vz: fz, power: p.boost > 0 ? 1.25 : 1 }, q);
+        if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'shove', victim: q.slot, owner: p.slot, outcome: res.outcome });
+      }
+    }
+  }
+
+  private releaseGrab(p: PlayerState) {
+    if (p.grabTarget < 0) return;
+    const victim = p.grabTarget; p.grabTarget = -1; p.grabbing = 0; p.grabCd = T.grabCooldown;
+    this.events.push({ t: 'release', slot: p.slot, victim, thrown: false });
+  }
+
+  /** Grab (hold): drag the robot in front of you, slowing both. Lasts a few seconds, then a cooldown. */
+  private grabs() {
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw);
+      if (p.grabTarget >= 0) {
+        const q = this.players[p.grabTarget];
+        if (!p.grabHeld || p.grabbing <= 0 || !this.ok(q) || p.stun > 0 || p.respawn > 0 || Math.hypot(q.x - p.x, q.z - p.z) > T.grabRange * 1.6) { this.releaseGrab(p); continue; }
+        q.x += (p.x + fx * 1.15 - q.x) * 0.3; q.z += (p.z + fz * 1.15 - q.z) * 0.3; q.vx *= 0.6; q.vz *= 0.6; q.slow = 0.12; // keep them slowed while held
+        continue;
+      }
+      if (!p.grabHeld || p.grabCd > 0 || p.stun > 0 || p.respawn > 0 || p.finishRank > 0) continue;
+      let best: PlayerState | null = null, bd = 1e9;
+      for (const q of this.players) {
+        if (q === p || !this.ok(q) || Math.abs(q.y - p.y) > 1.1 || q.invuln > 0.6) continue;
+        const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
+        if (d > T.grabRange || d < 1e-3 || (dx * fx + dz * fz) / d < 0.2 || d >= bd) continue;
+        best = q; bd = d;
+      }
+      if (!best) continue;
+      if (best.shield > 0) { best.shield = 0; best.invuln = 0.6; this.events.push({ t: 'impact', kind: 'shove', victim: best.slot, owner: p.slot, outcome: 'blocked' }); p.grabCd = 1; continue; }
+      p.grabTarget = best.slot; p.grabbing = T.grabMax; best.slow = 0.12;
+      this.events.push({ t: 'grab', slot: p.slot, victim: best.slot });
+    }
+  }
+
   /** Robot-vs-robot: soft separation (reactive bumping) + dive shoves. */
   private contacts() {
     const R = T.bumpRadius;
@@ -224,7 +295,13 @@ export class RaceSim {
           a.x -= nx * overlap * 0.5; a.z -= nz * overlap * 0.5;
           b.x += nx * overlap * 0.5; b.z += nz * overlap * 0.5;
           const k = (T.bumpImpulse * overlap) / R;
-          a.vx -= nx * k; a.vz -= nz * k; b.vx += nx * k; b.vz += nz * k;
+          // ramming: running into someone fast knocks them back and staggers them
+          const closing = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
+          if (closing > T.rammingSpeed) {
+            const aIsAttacker = a.vx * nx + a.vz * nz > -(b.vx * nx + b.vz * nz), att = aIsAttacker ? a : b, vic = aIsAttacker ? b : a, sg = aIsAttacker ? 1 : -1;
+            const res = resolveImpact({ kind: 'bump', owner: att.slot, x: att.x, y: att.y, z: att.z, vx: nx * sg, vz: nz * sg, power: Math.min(1.7, closing / 7) }, vic);
+            if (res.outcome !== 'ignored') this.events.push({ t: 'impact', kind: 'bump', victim: vic.slot, owner: att.slot, outcome: res.outcome });
+          } else { a.vx -= nx * k; a.vz -= nz * k; b.vx += nx * k; b.vz += nz * k; }
         }
       }
     }
@@ -232,6 +309,12 @@ export class RaceSim {
 
   // ------------------------------------------------------------------ race flow
   private computeRanks() {
+    if (this.course.survival) { // alive first, then the dead by elimination time (later = better)
+      const all = this.players.filter((p) => this.cfg.participants.includes(p.slot));
+      all.sort((a, b) => (a.alive !== b.alive ? (a.alive ? -1 : 1) : a.alive ? 0 : b.outAt - a.outAt));
+      all.forEach((p, i) => { this.rankOf[p.slot] = i; });
+      return;
+    }
     const ps = this.players.filter((p) => p.alive || p.finishRank > 0);
     ps.sort((a, b) => {
       if (a.finishRank && b.finishRank) return a.finishRank - b.finishRank;
@@ -252,7 +335,20 @@ export class RaceSim {
     }
   }
 
+  private eliminate(p: PlayerState) {
+    p.alive = false; p.outAt = this.tick; p.respawn = 0; p.item = null; this.releaseGrab(p);
+    for (const o of this.players) if (o.grabTarget === p.slot) this.releaseGrab(o);
+    this.events.push({ t: 'out', slot: p.slot });
+  }
+
   private checkEnd() {
+    if (this.course.survival) {
+      const alive = this.active, timeout = --this.roundTicksLeft <= 0, solo = this.cfg.participants.length === 1;
+      if (!timeout && (solo ? alive.length === 1 : alive.length > 1)) return; // still fighting
+      const out = this.cfg.participants.filter((s) => !this.players[s].alive).sort((a, b) => this.players[b].outAt - this.players[a].outAt);
+      const winners = alive.map((p) => p.slot);
+      return this.end(winners.length ? [winners[0]] : out.slice(0, 1), timeout && alive.length > 1 ? 'timeout' : 'qualified', winners.slice(1).concat(out).filter((s) => s !== (winners[0] ?? out[0])));
+    }
     const act = this.active;
     const finished = act.filter((p) => p.finishRank > 0).sort((a, b) => a.finishRank - b.finishRank);
     const allDone = act.length > 0 && finished.length === act.length;
@@ -269,9 +365,9 @@ export class RaceSim {
     this.end(qualified, quota || allDone ? 'qualified' : 'timeout');
   }
 
-  private end(qualified: number[], reason: RaceResult['reason']) {
+  private end(qualified: number[], reason: RaceResult['reason'], eliminated?: number[]) {
     this.phase = 'ended';
     const order = [...this.cfg.participants].sort((a, b) => this.rankOf[a] - this.rankOf[b]);
-    this.result = { qualified, eliminated: order.filter((s) => !qualified.includes(s)), reason };
+    this.result = { qualified, eliminated: eliminated ?? order.filter((s) => !qualified.includes(s)), reason };
   }
 }

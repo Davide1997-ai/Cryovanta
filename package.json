@@ -17,7 +17,8 @@
     "dist:win": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dist:win",
     "lan": "npm run build && npm run start:server",
     "start:server": "npm -w @cryovanta/server run start",
-    "play": "node scripts/launch.mjs"
+    "play": "node scripts/launch.mjs",
+    "bots": "tsx scripts/bots.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

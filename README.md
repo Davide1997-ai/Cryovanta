@@ -23,7 +23,7 @@ apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--por
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 105 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 119 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
@@ -40,14 +40,20 @@ Il gioco si vede sul **PC** (o su una TV collegata): lo schermo si **divide in u
 |---|---|
 | **Joystick** (tocca e trascina a sinistra, compare dove metti il pollice) | muove il robot, analogico, nessuno smussamento aggiunto |
 | **SALTA** | salta; premuto di nuovo in aria = propulsore |
+| **SPINGI** | spinta corta davanti a te: manda indietro e fa barcollare chi hai davanti (anche giù da un bordo). Ricarica ~0,75 s |
+| **AFFERRA** (tieni premuto) | afferri il robot davanti e lo trascini: lui va al 40% e non può saltare, tu al 75%. Dura ~2,4 s, poi ricarica. Premi **SPINGI** mentre lo tieni per **lanciarlo** |
 | **TUFFO** | scatto in avanti che spinge gli altri |
 | 🎁 | usa l'oggetto raccolto |
+
+Anche **correre addosso** a qualcuno a tutta velocità lo fa cadere e barcollare. Da tastiera (PC): **F** spingi, **G** afferra.
 
 Il telefono vibra quando raccogli un oggetto, vieni colpito o tagli il traguardo. Griglia dei riquadri: 1→1×1, 2→2×1, 3-4→2×2, 5-6→3×2, 7→4×2 con la **classifica nell'ottavo riquadro**.
 Il limite di 7 vale per i giocatori: lo schermo del PC non occupa uno slot.
 
 *Opzionale (beta)*: il pulsante "📱 Inclinazione" attiva il controllo con accelerometro; richiede HTTPS (`https://IP:porta+1/pad.html`, il browser mostra un avviso per il certificato locale).
 Con `HTTPS_PORT=0` l'HTTPS viene disattivato.
+
+**Provare da soli**: `npm run bots -- <CODICE> 5 race` aggiunge 5 giocatori finti che corrono (e si spingono); `... 7 brawl` li fa litigare (ottimo per l'Arena).
 
 ### App desktop (.exe, offline)
 
@@ -71,6 +77,7 @@ Tre mappe (scelte dall'host in lobby o "casuale", una diversa a ogni round) e qu
 | **Neon Circuit** | piattaforme sospese nello spazio, veloce e tecnica |
 | **Titan Gauntlet** | parco giochi **gigante** (~650 unità) di giorno: barre rotanti, martelli a pendolo con palle chiodate, rulli, trampolini, nastri trasportatori, ghiaccio, melma, vento, tessere che spariscono, pistoni |
 | **Frost Run** | pista ghiacciata con neve: derapate, bufere laterali, pendoli |
+| **Platform Panic** | arena a sopravvivenza (solo modalità Arena) |
 
 | Modalità | Regole |
 |---|---|
@@ -78,6 +85,7 @@ Tre mappe (scelte dall'host in lobby o "casuale", una diversa a ogni round) e qu
 | **Corsa singola** | un solo round, vince chi arriva prima |
 | **Gran Premio** | 3 round, punti 10-8-6-5-4-3-2, vince chi ne ha di più |
 | **Caos** | eliminazione con casse oggetto che ricompaiono in ~1 s |
+| **Arena (ultimo in piedi)** | nessun traguardo: su **Platform Panic** le tessere crollano dall'esterno, due barre rotanti al centro; cadere = eliminato. Spingi, afferra e lancia gli altri giù: vince l'ultimo |
 
 Aggiungere una mappa = una voce in `packages/shared/src/maps.ts`; una modalità = una voce in `modes.ts`.
 

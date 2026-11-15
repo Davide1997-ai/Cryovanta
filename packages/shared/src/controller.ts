@@ -71,6 +71,7 @@ export function createPlayer(slot: number, spawn: [number, number, number]): Pla
     grounded: false, platformId: -1, coyote: 0, jumpBuf: 0, jumpHeld: false, hoverFuel: T.hoverFuel, hovering: false,
     diveCd: 0, diving: 0, stun: 0, boost: 0, shield: 0, invuln: 0, respawn: 0, checkpoint: 0,
     item: null, useHeld: false, diveHeld: false, finishedAt: -1, finishRank: 0, alive: true,
+    pushCd: 0, pushing: 0, pushHeld: false, pushReq: false, grabHeld: false, grabbing: 0, grabCd: 0, grabTarget: -1, slow: 0, outAt: -1,
   };
 }
 
@@ -90,7 +91,7 @@ export function sanitizeInput(i: InputFrame): InputFrame {
   let mx = Number.isFinite(i.mx) ? i.mx : 0, mz = Number.isFinite(i.mz) ? i.mz : 0;
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
-  return { seq: i.seq, mx, mz, jump: !!i.jump, dive: !!i.dive, use: !!i.use };
+  return { seq: i.seq, mx, mz, jump: !!i.jump, dive: !!i.dive, use: !!i.use, push: !!i.push, grab: !!i.grab };
 }
 
 /** Advance one player by one tick. Does NOT handle items/impacts (that is the sim's job). */
@@ -105,6 +106,7 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   p.stun = Math.max(0, p.stun - DT); p.boost = Math.max(0, p.boost - DT);
   p.shield = Math.max(0, p.shield - DT); p.invuln = Math.max(0, p.invuln - DT);
   p.diveCd = Math.max(0, p.diveCd - DT); p.diving = Math.max(0, p.diving - DT);
+  p.pushCd = Math.max(0, p.pushCd - DT); p.pushing = Math.max(0, p.pushing - DT); p.grabCd = Math.max(0, p.grabCd - DT); p.grabbing = Math.max(0, p.grabbing - DT); p.slow = Math.max(0, p.slow - DT);
   p.coyote = Math.max(0, p.coyote - DT); p.jumpBuf = Math.max(0, p.jumpBuf - DT);
 
   const stunned = p.stun > 0;
@@ -112,7 +114,8 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   const wantsMove = mx !== 0 || mz !== 0;
   const under = p.grounded && p.platformId >= 0 ? course.platforms[p.platformId] : undefined;
   const surf = under?.surface ?? 'normal';
-  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1) * (surf === 'slime' ? T.slimeSpeedMul : 1);
+  const hold = p.slow > 0 ? T.heldSpeedMul : p.grabbing > 0 ? T.grabberSpeedMul : 1; // being dragged / dragging someone
+  const speed = T.runSpeed * (p.boost > 0 ? T.boostMul : 1) * (surf === 'slime' ? T.slimeSpeedMul : 1) * hold;
   let accel = p.grounded ? (wantsMove ? T.accelGround : T.frictionGround) : T.accelAir;
   if (surf === 'ice') accel *= wantsMove ? T.iceAccelMul : T.iceFrictionMul; // slippery: slow to start, slow to stop
   const steer = p.diving > 0 ? 0.15 : 1; // committed dive = limited steering
@@ -125,11 +128,12 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   // ---- jump / hover ----
   const jumpEdge = inp.jump && !p.jumpHeld;
   p.jumpHeld = inp.jump;
-  if (jumpEdge && !stunned) p.jumpBuf = T.jumpBuffer;
+  const noJump = stunned || p.slow > 0;
+  if (jumpEdge && !noJump) p.jumpBuf = T.jumpBuffer;
   if (!inp.jump) p.hovering = false;
-  if (!stunned && p.jumpBuf > 0 && (p.grounded || p.coyote > 0)) {
+  if (!noJump && p.jumpBuf > 0 && (p.grounded || p.coyote > 0)) {
     p.vy = T.jumpVelocity * (surf === 'slime' ? T.slimeJumpMul : 1); p.grounded = false; p.coyote = 0; p.jumpBuf = 0; p.platformId = -1;
-  } else if (jumpEdge && !stunned && !p.grounded && p.hoverFuel > 0 && p.vy < T.hoverMaxRise) {
+  } else if (jumpEdge && !noJump && !p.grounded && p.hoverFuel > 0 && p.vy < T.hoverMaxRise) {
     p.hovering = true; // thruster hop (hold to burn fuel)
   }
   if (p.hovering && inp.jump && p.hoverFuel > 0 && !stunned) {
@@ -145,6 +149,14 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
     p.vx = Math.sin(p.yaw) * sp; p.vz = Math.cos(p.yaw) * sp;
     if (p.grounded) p.vy = Math.max(p.vy, T.diveLift);
     p.diveCd = T.diveCooldown; p.diving = 0.45; p.hovering = false; p.grounded = false; p.platformId = -1;
+  }
+
+  // ---- shove: one-tick request resolved by the sim (needs the other players); the lunge is predicted locally ----
+  const pushEdge = inp.push && !p.pushHeld;
+  p.pushHeld = inp.push; p.pushReq = false; p.grabHeld = inp.grab && !stunned;
+  if (pushEdge && !stunned && p.pushCd <= 0) {
+    p.pushReq = true; p.pushCd = T.pushCooldown; p.pushing = 0.28;
+    p.vx += Math.sin(p.yaw) * T.pushLunge; p.vz += Math.cos(p.yaw) * T.pushLunge;
   }
 
   // ---- gravity ----

@@ -97,6 +97,26 @@ Tutto ciò che si muove è una **funzione pura del tick** (nessuno stato da sinc
   I test verificano per ogni mappa/difficoltà: struttura valida, determinismo, spawn/casse/checkpoint su una piattaforma, **nessun vuoto > 5.6 u**.
 * **Modalità** (`modes.ts` + `Match`): dati + interpretazione di `kind`. L'host sceglie mappa e modalità (`config`, solo host, resetta i "pronto").
 
+## 4c. Giocare sporco (Stumble Guys-style)
+
+* **Spingi** (`push`, edge): cono davanti (raggio 2.1, ±~70°), knockback 10.5 + stordimento 0.5 s, cooldown 0.75 s; l'affondo in avanti è predetto, l'effetto sugli altri lo decide il server.
+  Lo scudo la para. Con boost la spinta è ×1.25.
+* **Afferra** (`grab`, tenuto): aggancia il robot più vicino davanti (raggio 1.7). Il bersaglio va al 40% e non salta (`slow`), chi afferra al 75%; lo si trascina davanti a sé.
+  Max 2.4 s poi cooldown 3.5 s; si molla se si rilascia il tasto, ci si stordisce o la distanza supera ~2.7. **Spingi mentre afferri = lancio** (15 u/s, stordimento 0.7 s).
+* **Urti**: correre addosso a qualcuno a >6.5 u/s di velocità relativa è un `bump` (knockback ∝ velocità, stordimento 0.28 s); sotto soglia resta la spinta morbida.
+* Tutti passano da `resolveImpact` (i-frame, scudo): una tabella sola. Il robot colpito cade all'indietro e si rialza (animazione guidata da `st`).
+
+## 4d. Round a sopravvivenza (Arena)
+
+`Course.survival`: niente traguardo, **cadere = eliminato** (nessun respawn, `outAt`), vince l'ultimo; classifica = ordine di eliminazione. La mappa **Platform Panic** è una griglia 7×7 di tessere
+con `Platform.vanishAt` (funzione pura del tempo: crollano dall'anello esterno verso il centro, ultimi secondi di tremolio rosso), più due barre rotanti incrociate al centro.
+La modalità `arena` gioca solo mappe `survival`; le modalità di corsa non estraggono mai l'arena (`RACE_MAP_IDS` / `SURVIVAL_MAP_IDS`).
+
+## 4e. Traguardo e qualificazione (leggibilità)
+
+Cartello **FINISH** a scacchi su due pali alti 16 u e striscia a scacchi sul pavimento; ogni riquadro mostra distanza residua, barra di avanzamento e, al taglio, **QUALIFICATO!**
+(eliminazione) / **TRAGUARDO!** con coriandoli; l'intestazione mostra `qualificati n/N`. Lo snapshot porta `qf` (arrivati), `qq` (posti), `fz` (z del traguardo), `sv` (sopravvivenza).
+
 ## 5. Formato di gara
 
 Eliminazione: ogni round passano i primi `ceil(n/2)` (7 → 4 → 2 → 1). Il round finisce quando la quota è piena, tutti sono
@@ -130,8 +150,12 @@ Difficoltà e lunghezza crescono col round. Partenza con countdown di 3 s; 5 s d
   Griglia 1×1 / 2×1 / 2×2 / 3×2 / 4×2 (la cella avanzata ospita la classifica). Con molti riquadri: ombre reali spente (un solo frustum non copre giocatori lontani),
   portata di visibilità ridotta, nebbia più fitta e risoluzione dinamica (`adaptQuality`). Il bloom (post-processing) è disattivato nel multi-riquadro.
   Una camera non insegue un robot che cade nel vuoto (mantiene l'ultima altezza a terra); i riquadri degli eliminati osservano il leader.
-  Buffer di interpolazione dello schermo: 2 snapshot + 25 ms (≈91 ms), allargato dalla stima del jitter.
-* **Joypad** (`pad.html` + `pad.ts`, ~9 KB, nessun three.js): joystick flottante + 3 pulsanti (tap latched), invia `InputFrame` a 60 Hz con le stesse regole del client completo
+  Lo schermo riceve lo stato **a ogni tick (60 Hz)**, i telefoni a 30 Hz (`sendDisplays`/`sendPlayers`): buffer di interpolazione 2 snapshot + 12 ms (≈45 ms), allargato dalla stima del jitter.
+  Misurato: dal tocco sul joystick al primo movimento nello stato del server ≈ 19 ms (mediana, localhost).
+* **Joypad** (`pad.html` + `pad.ts`, ~10 KB, nessun three.js): joystick flottante + 5 pulsanti (SALTA, SPINGI, AFFERRA, TUFFO, oggetto; tap latched).
+  Layout in unità `--u = min(1dvh, 1.7vw)`: i pulsanti scalano con l'altezza *reale* visibile e stanno sempre nello schermo (verificato a 700×300). Anti-zoom: `touch-action:none`, blocco di `gesture*`/pizzico,
+  blocco del doppio tocco **solo in gioco** (altrove cancellerebbe il click dei menu), `position:fixed`+`dvh` contro le barre del browser.
+  Inoltre, invia `InputFrame` a 60 Hz con le stesse regole del client completo
   (latch dei tap, ridondanza, flush per frame). Nessuna predizione: il robot si vede sullo schermo.
 * **Inclinazione** (`tilt.ts`, pura e testata): il vettore "su" nel sistema del dispositivo `u = (-cosβ·sinγ, sinβ, cosβ·cosγ)` è indipendente dalla bussola e dalla piattaforma;
   si ruota nel sistema dello schermo con `screen.orientation.angle` (verticale/orizzontale, entrambi i versi) e si ricava roll/pitch. Poi: sottrazione della posa di riposo

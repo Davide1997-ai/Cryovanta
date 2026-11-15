@@ -21,7 +21,7 @@ export function platformBox(p: Platform, tick: number, out: Box): Box {
   out.minx = tmp.x - p.hx; out.maxx = tmp.x + p.hx;
   out.miny = tmp.y - p.hy; out.maxy = tmp.y + p.hy;
   out.minz = tmp.z - p.hz; out.maxz = tmp.z + p.hz;
-  out.id = p.id; out.kind = p.kind; out.active = p.kind !== 'blink' || blinkSolid(p, tick);
+  out.id = p.id; out.kind = p.kind; out.active = (p.kind !== 'blink' || blinkSolid(p, tick)) && (p.vanishAt === undefined || tick * DT < p.vanishAt);
   return out;
 }
 

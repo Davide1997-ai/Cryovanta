@@ -8,7 +8,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { blinkPhase, groundBelow, hazardPose, platformCenter, windActive, type Course, type CourseHazard, type Platform, type Theme } from '@cryovanta/shared';
 import type { Rect } from './layout';
-import { cloudTexture, scaleBoxUV, surfaceTexture, waterNormal, windTexture, type TexKind } from './textures';
+import { bannerTexture, checkerStrip, cloudTexture, scaleBoxUV, surfaceTexture, waterNormal, windTexture, type TexKind } from './textures';
 
 export const NEON = [0x00e5ff, 0xff3df2, 0x7cff3a, 0xffb020, 0x8a6bff, 0xff4d4d];
 
@@ -38,6 +38,9 @@ export class Stage {
   private hazardObjs: { h: CourseHazard; obj: THREE.Object3D; rope?: THREE.Mesh }[] = [];
   private zoneObjs: { z: Course['zones'][number]; mesh: THREE.Mesh; tex: THREE.Texture }[] = [];
   private blobs: THREE.Mesh[] = [];
+  private timed: { p: Platform; g: THREE.Object3D; mat: THREE.MeshStandardMaterial }[] = [];
+  private links: THREE.Mesh[] = [];
+  private conf!: { pts: THREE.Points; pos: Float32Array; col: Float32Array; vel: Float32Array; life: Float32Array; n: number; head: number; alive: number };
   /** distance culling along the track (the park maps are ~650 units long) */
   private cullables: { obj: THREE.Object3D; z: number; r: number }[] = [];
   /** phones/tablets: no post-processing/shadows, lower pixel ratio (battery + 7-player load) */
@@ -144,7 +147,7 @@ export class Stage {
   buildCourse(course: Course) {
     this.setTheme(course.theme);
     this.course = course;
-    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = []; this.blinkMeshes = []; this.belts = []; this.hazardObjs = []; this.zoneObjs = []; this.cullables = [];
+    this.courseGroup.clear(); this.platMeshes = []; this.boxMeshes = []; this.blinkMeshes = []; this.belts = []; this.hazardObjs = []; this.zoneObjs = []; this.cullables = []; this.timed = [];
     if (course.theme === 'neon') this.buildNeonCourse(course); else this.buildParkCourse(course);
     if (this.water) this.water.position.y = course.killY + 8;
   }
@@ -181,6 +184,8 @@ export class Stage {
     const L = new THREE.Mesh(new THREE.BoxGeometry(0.4, 8, 0.4), m), R = L.clone(), T = new THREE.Mesh(new THREE.BoxGeometry(16.4, 0.5, 0.5), m);
     L.position.set(-8, 4, 0); R.position.set(8, 4, 0); T.position.set(0, 8, 0); arch.add(L, R, T);
     const goal = course.platforms[course.platforms.length - 1];
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(14, 3.4, 0.5), new THREE.MeshBasicMaterial({ map: bannerTexture('FINISH'), fog: false })); sign.position.y = 6.2; arch.add(sign);
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(16, 2.2), new THREE.MeshBasicMaterial({ map: checkerStrip() })); strip.rotation.x = -Math.PI / 2; strip.position.y = 0.04; arch.add(strip);
     arch.position.set(0, goal.y + goal.hy, fz); this.courseGroup.add(arch);
     // item boxes (shared geometry/materials; colour is animated per box)
     const cubeGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9), ringGeo = new THREE.TorusGeometry(0.75, 0.035, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
@@ -246,14 +251,10 @@ export class Stage {
         const sk = new THREE.Mesh(new THREE.BoxGeometry(p.hx * 1.7, 1.4, p.hz * 1.7), under); sk.position.y = -p.hy - 0.7; sk.castShadow = true; g.add(sk);
       }
       this.courseGroup.add(g); this.platMeshes.push({ mesh: g, id: p.id });
-      this.cullables.push({ obj: g, z: p.z, r: p.hz + p.az + 2 });
+      if (p.vanishAt !== undefined) { const m = (this.parkMat(kind, frost) as THREE.MeshStandardMaterial).clone(); mesh.material = m; this.timed.push({ p, g, mat: m }); } // collapsing arena tiles
+      else this.cullables.push({ obj: g, z: p.z, r: p.hz + p.az + 2 });
     }
-    // finish gantry: checkered banner on tall posts
-    const goal = course.platforms[course.platforms.length - 1], arch = new THREE.Group(), cm = this.parkMat('candy', frost);
-    const post = (x: number) => { const m = new THREE.Mesh(new THREE.BoxGeometry(1.2, 14, 1.2), cm); m.position.set(x, 7, 0); m.castShadow = !lite; arch.add(m); };
-    post(-(goal.hx - 1)); post(goal.hx - 1);
-    const banner = new THREE.Mesh(new THREE.BoxGeometry((goal.hx - 1) * 2, 3, 1), cm); banner.position.y = 13; arch.add(banner);
-    arch.position.set(0, goal.y + goal.hy, course.finishZ); this.courseGroup.add(arch);
+    if (!course.survival) this.addFinishLine(course, frost);
     // item boxes
     const cubeGeo = new THREE.BoxGeometry(1, 1, 1), ringGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const b of course.boxes) {
@@ -276,6 +277,16 @@ export class Stage {
       if (i % 3) { const s = 4 + rr(3) * 6, b = new THREE.Mesh(new THREE.SphereGeometry(s, 24, 16), i % 2 ? sp : bal); b.position.set(x, 10 + rr(4) * 40, z); b.castShadow = !lite; this.courseGroup.add(b); this.cullables.push({ obj: b, z, r: s + 4 }); }
       else { const isl = new THREE.Group(), s = 9 + rr(5) * 12; const rock = new THREE.Mesh(new THREE.ConeGeometry(s, s * 1.4, 7), this.parkMat('concrete', frost, 'rock')); rock.rotation.x = Math.PI; rock.position.y = -s * 0.7; const top = new THREE.Mesh(new THREE.CylinderGeometry(s, s, 0.8, 7), this.parkMat('grass', frost)); isl.add(rock, top); isl.position.set(x, -4 + rr(6) * 14, z); this.courseGroup.add(isl); this.cullables.push({ obj: isl, z, r: s * 1.5 + 4 }); }
     }
+  }
+
+  /** Finish line: tall posts, a huge FINISH banner and a checkered strip across the goal platform — impossible to miss. */
+  private addFinishLine(course: Course, frost: boolean) {
+    const lite = this.lite, goal = course.platforms[course.platforms.length - 1], g = new THREE.Group(), cm = this.parkMat('candy', frost);
+    const w = (goal.hx - 0.5) * 2;
+    for (const sx of [-1, 1]) { const m = new THREE.Mesh(new THREE.BoxGeometry(1.4, 16, 1.4), cm); m.position.set(sx * (w / 2), 8, 0); m.castShadow = !lite; g.add(m); }
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(w, 5, 1), new THREE.MeshBasicMaterial({ map: bannerTexture('FINISH'), fog: false })); sign.position.y = 15; g.add(sign);
+    g.position.set(0, goal.y + goal.hy, course.finishZ); this.courseGroup.add(g);
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.4), new THREE.MeshBasicMaterial({ map: checkerStrip(), fog: false })); strip.rotation.x = -Math.PI / 2; strip.position.set(0, goal.y + goal.hy + 0.04, course.finishZ); this.courseGroup.add(strip);
   }
 
   private makeHazard(h: CourseHazard, frost: boolean): { h: CourseHazard; obj: THREE.Object3D; rope?: THREE.Mesh } {
@@ -327,6 +338,14 @@ export class Stage {
     this.focusView(this.camera);                    // single-view path (split-screen calls focusView per viewport instead)
     if (!this.course || this.course.theme === 'neon') return;
     const t = tick / 60;
+    for (const tm of this.timed) {
+      const left = tm.p.vanishAt! - t;
+      if (left > 0) {
+        const warn = left < 4, k = left < 1.2 ? 30 : 16;
+        tm.mat.emissive.setHex(warn && Math.floor(t * (left < 1.2 ? 14 : 6)) % 2 === 0 ? 0xff2a00 : 0x000000); tm.mat.emissiveIntensity = warn ? 1.1 : 0;
+        tm.g.position.y = tm.p.y + (warn ? Math.sin(t * k) * (left < 1.2 ? 0.09 : 0.03) : 0);
+      } else { const f = -left; tm.g.position.y = tm.p.y - 4.5 * f * f; tm.g.rotation.x = f * 0.8; tm.g.visible = tm.g.position.y > -60; } // the tile drops away
+    }
     for (const b of this.blinkMeshes) {
       const ph = blinkPhase(b.p, tick), duty = b.p.duty ?? 0.6, solid = ph < duty, warn = solid && ph > duty - 0.2;
       b.mesh.visible = solid; b.ghost.visible = !solid;
@@ -401,9 +420,44 @@ export class Stage {
     m.position.set(x, gy + 0.03, z); const k = Math.max(0.35, 1 - (y - gy) * 0.08); m.scale.setScalar(k); (m.material as THREE.MeshBasicMaterial).opacity = 0.38 * k;
   }
 
+  /** Confetti burst (finish line celebration). */
+  confetti(x: number, y: number, z: number) {
+    if (!this.conf) {
+      const n = 600, pos = new Float32Array(n * 3).fill(-9999), col = new Float32Array(n * 3), g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      const pts = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.32, vertexColors: true, transparent: true, depthWrite: false, fog: false })); pts.frustumCulled = false; this.scene.add(pts);
+      this.conf = { pts, pos, col, vel: new Float32Array(n * 3), life: new Float32Array(n), n, head: 0, alive: 0 };
+    }
+    const c = this.conf, pal = [0xff3df2, 0x00e5ff, 0xffd23d, 0x7cff3a, 0xffffff, 0xff6a3d], tc = new THREE.Color();
+    for (let k = 0; k < 140; k++) {
+      const i = c.head++ % c.n, a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 7;
+      c.pos.set([x, y + 1.5, z], i * 3); c.vel.set([Math.cos(a) * sp, 6 + Math.random() * 7, Math.sin(a) * sp], i * 3); c.life[i] = 2.4 + Math.random() * 0.8;
+      tc.setHex(pal[k % pal.length]); c.col.set([tc.r, tc.g, tc.b], i * 3);
+    }
+    c.alive = 1;
+  }
+  private updateConfetti(dt: number) {
+    const c = this.conf; if (!c || !c.alive) return; let any = false;
+    for (let i = 0; i < c.n; i++) {
+      if (c.life[i] <= 0) continue; any = true; c.life[i] -= dt; const j = i * 3;
+      c.vel[j + 1] -= 9 * dt; c.vel[j] *= 1 - 0.6 * dt; c.vel[j + 2] *= 1 - 0.6 * dt; c.pos[j] += c.vel[j] * dt; c.pos[j + 1] += c.vel[j + 1] * dt; c.pos[j + 2] += c.vel[j + 2] * dt;
+      if (c.life[i] <= 0) c.pos[j + 1] = -9999;
+    }
+    c.alive = any ? 1 : 0; (c.pts.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true; (c.pts.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  /** Glowing "rope" between a grabber and the robot it holds. */
+  link(slot: number, a: THREE.Vector3 | null, b: THREE.Vector3 | null) {
+    let m = this.links[slot];
+    if (!m) { m = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1, 8), new THREE.MeshBasicMaterial({ color: 0x7cff3a, fog: false })); this.scene.add(m); this.links[slot] = m; }
+    m.visible = !!(a && b); if (!a || !b) return;
+    const d = new THREE.Vector3().subVectors(b, a); const l = d.length() || 0.01;
+    m.position.copy(a).add(b).multiplyScalar(0.5).add(new THREE.Vector3(0, 0.7, 0)); m.scale.set(1, l, 1); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+  }
+
   private tmpColor = new THREE.Color();
   animate(dt: number, hiddenBoxes: ReadonlySet<number> | number[]) {
-    this.time += dt;
+    this.time += dt; this.updateConfetti(dt);
     this.hiddenBoxes = hiddenBoxes instanceof Set ? hiddenBoxes : new Set(hiddenBoxes);
     this.boxMeshes.forEach((m, id) => {
       if (!m) return;

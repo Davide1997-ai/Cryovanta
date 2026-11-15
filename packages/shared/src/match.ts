@@ -5,7 +5,7 @@
  *  grandprix:         3 rounds, points per finishing position, most points wins.
  */
 import { TICK_RATE } from './constants';
-import { MAP_IDS } from './maps';
+import { MAPS, RACE_MAP_IDS, SURVIVAL_MAP_IDS } from './maps';
 import { MODES, POINTS, type ModeDef } from './modes';
 import { RaceSim, type RaceResult } from './sim';
 import type { InputFrame } from './types';
@@ -41,17 +41,19 @@ export class Match {
 
   /** Map for a round: fixed, or seeded-random (never the same map twice in a row). */
   setupFor(round: number): RoundSetup {
+    const survival = this.mode.kind === 'survival';
+    const pool = survival ? SURVIVAL_MAP_IDS : RACE_MAP_IDS; // a mode only plays maps of its own kind
     let mapId = this.opts.map;
-    if (mapId === 'random' || !MAP_IDS.includes(mapId)) {
-      const base = (this.seed >>> 0) % MAP_IDS.length;
-      mapId = MAP_IDS[(base + round) % MAP_IDS.length];
+    if (mapId === 'random' || !MAPS[mapId] || !pool.includes(mapId)) {
+      const base = (this.seed >>> 0) % pool.length;
+      mapId = pool[(base + round) % pool.length];
     }
     const k = this.mode.kind;
-    const difficulty = k === 'elimination' ? Math.min(1, round * 0.35) : k === 'race' ? 0.55 : 0.3 + round * 0.25;
+    const difficulty = k === 'elimination' ? Math.min(1, round * 0.35) : k === 'race' ? 0.55 : k === 'survival' ? 0.4 : 0.3 + round * 0.25;
     return { mapId, difficulty };
   }
 
-  private qualify(n: number) { return this.mode.kind === 'elimination' ? qualifyFor(n) : n; }
+  private qualify(n: number) { return this.mode.kind === 'elimination' ? qualifyFor(n) : this.mode.kind === 'survival' ? 1 : n; }
 
   private newRound(): RaceSim {
     this.currentSetup = this.setupFor(this.roundIdx);
@@ -79,11 +81,12 @@ export class Match {
       this.afterSurvivorsChanged(true);
       return;
     }
-    // race / grandprix: nobody is eliminated; `qualified` is the full ranking (finishers first, then by progress)
-    const ranking = res.qualified.filter((s) => this.survivors.includes(s));
+    // race / grandprix / survival: `qualified` (+ `eliminated` in survival) is the full ranking, best first
+    const full = this.mode.kind === 'survival' ? [...res.qualified, ...res.eliminated] : res.qualified;
+    const ranking = full.filter((s) => this.survivors.includes(s) || this.mode.kind === 'survival');
     this.lastRanking = ranking;
-    ranking.forEach((s, i) => { this.points[s] += this.mode.kind === 'race' ? 0 : POINTS[Math.min(i, POINTS.length - 1)]; });
-    const rounds = this.mode.kind === 'race' ? 1 : GRANDPRIX_ROUNDS;
+    ranking.forEach((s, i) => { this.points[s] += this.mode.kind === 'grandprix' ? POINTS[Math.min(i, POINTS.length - 1)] : 0; });
+    const rounds = this.mode.kind === 'grandprix' ? GRANDPRIX_ROUNDS : 1;
     if (this.roundIdx + 1 >= rounds || this.survivors.length <= 1) { this.finishScoring(); }
     else { this.phase = 'intermission'; this.intermissionTicks = INTERMISSION_SECONDS * TICK_RATE; }
   }
@@ -107,6 +110,7 @@ export class Match {
     if (this.phase === 'over') return;
     if (this.survivors.length <= 1) {
       if (this.mode.kind === 'elimination') this.afterSurvivorsChanged(false);
+      else if (this.mode.kind === 'survival') { /* the sim ends the round when only one robot is left */ }
       else if (this.survivors.length === 0) { this.phase = 'over'; this.winner = -1; }
       else if (this.phase === 'round' && this.survivors.length === 1) { this.lastRanking = [...this.survivors]; this.finishScoring(); }
     }

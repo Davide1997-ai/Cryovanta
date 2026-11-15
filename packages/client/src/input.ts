@@ -7,13 +7,14 @@ export class Input {
   private stick = { x: 0, y: 0 };
   private tJump = false; private tDive = false;
   /** a tap shorter than one frame must still register: latched until the next sample() */
-  private jumpLatch = false; private diveLatch = false;
+  private jumpLatch = false; private diveLatch = false; private pushLatch = false;
   constructor(canvas: HTMLElement) {
     this.initTouch();
     addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       this.keys.add(e.code);
       if (e.code === 'KeyE' || e.code === 'KeyQ') this.useQueued = true;
+      if (e.code === 'KeyF' && !e.repeat) this.pushLatch = true;
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     });
     addEventListener('keyup', (e) => this.keys.delete(e.code));
@@ -27,7 +28,8 @@ export class Input {
     let x = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0) + this.stick.x;
     let y = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0) + this.stick.y;
     let jump = this.down('Space') || this.tJump || this.jumpLatch, dive = this.down('ShiftLeft', 'ShiftRight') || this.tDive || this.diveLatch, use = this.useQueued;
-    this.jumpLatch = this.diveLatch = false;
+    let push = this.down('KeyF') || this.pushLatch, grab = this.down('KeyG');
+    this.jumpLatch = this.diveLatch = this.pushLatch = false;
     const gp = navigator.getGamepads?.()[0];
     if (gp) {
       const ax = Math.abs(gp.axes[0]) > 0.15 ? gp.axes[0] : 0, ay = Math.abs(gp.axes[1]) > 0.15 ? -gp.axes[1] : 0;
@@ -38,7 +40,7 @@ export class Input {
     const c = Math.cos(this.camYaw), s = Math.sin(this.camYaw);
     const mx = -x * c + y * s, mz = x * s + y * c;
     this.useQueued = false;
-    return { mx, mz, jump, dive, use };
+    return { mx, mz, jump, dive, use, push, grab };
   }
   private down(...codes: string[]) { return codes.some((c) => this.keys.has(c)); }
 

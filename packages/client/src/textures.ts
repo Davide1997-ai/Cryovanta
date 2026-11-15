@@ -102,3 +102,17 @@ export function scaleBoxUV(geo: THREE.BoxGeometry, hx: number, hy: number, hz: n
   for (let f = 0; f < 6; f++) for (let v = 0; v < 4; v++) { const i = f * 4 + v; uv.setXY(i, uv.getX(i) * dims[f][0] * 2 / tile, uv.getY(i) * dims[f][1] * 2 / tile); }
   uv.needsUpdate = true;
 }
+
+/** Big readable sign (finish banner). */
+export function bannerTexture(text: string, a = '#ffffff', b = '#111111'): THREE.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 256; const g = c.getContext('2d')!;
+  const cell = 32; for (let y = 0; y < 8; y++) for (let x = 0; x < 32; x++) { g.fillStyle = (x + y) % 2 ? a : b; g.fillRect(x * cell, y * cell, cell, cell); }
+  g.fillStyle = 'rgba(0,0,0,.78)'; g.fillRect(40, 40, 944, 176);
+  g.font = '900 150px system-ui, Arial Black, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = 10; g.strokeStyle = '#ff3df2'; g.strokeText(text, 512, 132); g.fillStyle = '#ffffff'; g.fillText(text, 512, 132);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; return tex;
+}
+export function checkerStrip(): THREE.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 64; const g = c.getContext('2d')!;
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 16; x++) { g.fillStyle = (x + y) % 2 ? '#fff' : '#111'; g.fillRect(x * 32, y * 32, 32, 32); }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; return tex;
+}

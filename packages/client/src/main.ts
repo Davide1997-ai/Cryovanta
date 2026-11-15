@@ -32,9 +32,10 @@ let predictor: Predictor | null = null;
 let snaps: { t: number; s: Snapshot }[] = [];
 let participants: number[] = [];
 /** Adaptive jitter buffer: widens when Wi-Fi delivers snapshots in bursts, shrinks again when it calms down. */
-const SNAP_MS = (1000 * SNAPSHOT_EVERY) / TICK_RATE;
+/** the server streams state to big screens every tick (60 Hz) and to players every SNAPSHOT_EVERY ticks */
+const SNAP_MS = (1000 * (SCREEN ? 1 : SNAPSHOT_EVERY)) / TICK_RATE;
 /** The big screen has no prediction, so it uses the smallest safe buffer (2 snapshots + margin); the jitter estimate widens it when Wi-Fi is bursty. */
-const MIN_DELAY = SCREEN ? Math.round(SNAP_MS * 2 + 25) : INTERP_DELAY_MS;
+const MIN_DELAY = SCREEN ? Math.round(SNAP_MS * 2 + 12) : INTERP_DELAY_MS;
 let interpDelay = MIN_DELAY, snapGap = 0 /* EWMA of |arrival gap - nominal| = jitter (ms) */, lastSnapT = 0;
 let toastTimer = 0;
 let inGameView = false;
@@ -126,7 +127,15 @@ function onMsg(m: ServerMsg) {
       predictor?.reconcile(m);
       for (const e of m.ev) {
         if (e.t === 'pickup' && e.slot === me) toast(`${ICON[e.item]} ${e.item.toUpperCase()}!`);
-        if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : e.kind === 'obstacle' ? '🔨 OSTACOLO!' : '💫 COLPITO!');
+        if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : e.kind === 'obstacle' ? '🔨 OSTACOLO!' : e.kind === 'shove' ? '👊 SPINTO!' : e.kind === 'bump' ? '💢 URTATO!' : '💫 COLPITO!');
+        { // global feedback (screen shows everyone's actions; a player's own robot gets personal toasts below)
+          const nm = (s: number) => room?.members.find((x) => x.slot === s)?.name ?? `P${s + 1}`;
+          if (e.t === 'finish') { stage.confetti(robotPos[e.slot].x, robotPos[e.slot].y, robotPos[e.slot].z); if (SCREEN) feed(`🏁 ${nm(e.slot)} è #${e.rank}`); }
+          if (e.t === 'impact' && SCREEN && (e.kind === 'shove' || e.kind === 'bump') && e.outcome === 'hit') feed(`${e.kind === 'shove' ? '👊' : '💢'} ${nm(e.owner)} ➜ ${nm(e.victim)}`);
+          if (e.t === 'grab' && SCREEN) feed(`✋ ${nm(e.slot)} afferra ${nm(e.victim)}`);
+          if (e.t === 'release' && e.thrown && SCREEN) feed(`🚀 ${nm(e.slot)} lancia ${nm(e.victim)}`);
+          if (e.t === 'out') feed(`💀 ${nm(e.slot)} è fuori!`);
+        }
         if (SCREEN && e.t === 'finish') { const nm = room?.members.find((x) => x.slot === e.slot)?.name ?? '?'; toast(`🏁 ${nm} è #${e.rank}`, 2200); }
         if (e.t === 'finish' && e.slot === me) toast(`🏁 TRAGUARDO #${e.rank}`, 2500);
         if (e.t === 'fall' && e.slot === me) toast('Caduto!');
@@ -210,6 +219,7 @@ function render(dt: number, now: number) {
       robots[s].update(dt, ps, pos, splitting ? 0 : stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
       stage.blob(s, pos.x, pos.y, pos.z, ps.al === 1 && ps.rs <= 0, dynTick);
     }
+    for (let s = 0; s < MAX_PLAYERS_PER_ROOM; s++) { const p = latest.players[s]; stage.link(s, p && p.gb > 0 && p.gt >= 0 ? robotPos[s] : null, p && p.gt >= 0 ? robotPos[p.gt] : null); }
     stage.animate(dt, latest.bx);
     syncProjectiles(br);
     if (SCREEN) { if (splitting) splitFrame(dt, latest); else hideCells(); } else hud(latest);
@@ -298,6 +308,9 @@ function renderScreen() {
   ($('sStart') as HTMLButtonElement).disabled = room.members.length < 2 || room.phase !== 'lobby';
 }
 // ---- split screen: one camera + one HUD cell per player ----
+const feedItems: { t: number; text: string }[] = [];
+function feed(text: string) { feedItems.push({ t: performance.now(), text }); if (feedItems.length > 6) feedItems.shift(); }
+function renderFeed(now: number) { const live = feedItems.filter((f) => now - f.t < 4500).slice(-4); setTxt($('feed'), 'feed', live.map((f) => `<div>${esc(f.text)}</div>`).join('')); }
 const cellEls: HTMLElement[] = [];
 const cache = new Map<string, string>();
 const setTxt = (el: Element, key: string, v: string) => { if (cache.get(key) !== v) { cache.set(key, v); el.innerHTML = v; } };
@@ -305,7 +318,7 @@ const hexc = (n: number) => '#' + n.toString(16).padStart(6, '0');
 function hideCells() { $('cells').style.display = 'none'; $('board').style.display = 'none'; }
 
 function followCam(pc: PlayerCam, tgt: THREE.Vector3, dt: number) {
-  const back = 9.2, up = 5.2, k = 1 - Math.exp(-7 * dt), kl = 1 - Math.exp(-10 * dt);
+  const back = 9.2, up = 5.2, k = 1 - Math.exp(-11 * dt), kl = 1 - Math.exp(-14 * dt); // tight follow: a floaty camera makes controls feel laggy
   const dx = tgt.x, dy = tgt.y + up, dz = tgt.z - back;
   if (!pc.init) { pc.pos.set(dx, dy, dz); pc.look.set(tgt.x, tgt.y + 1.4, tgt.z + 5); pc.init = true; }
   pc.pos.x += (dx - pc.pos.x) * k; pc.pos.y += (dy - pc.pos.y) * k; pc.pos.z += (dz - pc.pos.z) * k;
@@ -332,7 +345,7 @@ function splitFrame(dt: number, s: Snapshot) {
 
   // ---- HUD overlay, one per cell ----
   const host = $('cells'); host.style.display = 'block';
-  while (cellEls.length < n) { const d = document.createElement('div'); d.className = 'cell'; d.innerHTML = '<div class="cname"></div><div class="crank"></div><div class="cstat"></div><div class="citem"></div><div class="cover"></div>'; host.appendChild(d); cellEls.push(d); }
+  while (cellEls.length < n) { const d = document.createElement('div'); d.className = 'cell'; d.innerHTML = '<div class="cname"></div><div class="crank"></div><div class="cstat"></div><div class="citem"></div><div class="cover"></div><div class="cdist"></div><div class="cprog"><i></i></div>'; host.appendChild(d); cellEls.push(d); }
   cellEls.forEach((el, i) => (el.style.display = i < n ? 'block' : 'none'));
   slots.forEach((slot, i) => {
     const el = cellEls[i], r = cells[i], p = s.players[slot], k = `c${i}`;
@@ -342,14 +355,24 @@ function splitFrame(dt: number, s: Snapshot) {
     setTxt(el.children[1], k + 'r', p?.fr ? '🏁 #' + p.fr : p?.al ? `#${rk}/${order.length}` : '');
     setTxt(el.children[2], k + 's', p ? (p.st > 0 ? '💫' : p.sh > 0 ? '🛡️' : p.bo > 0 ? '⚡' : p.rs > 0 ? '⌛' : '') : '');
     setTxt(el.children[3], k + 'i', p?.it ? ICON[p.it] : '');
-    setTxt(el.children[4], k + 'o', p && !p.al && !p.fr ? 'ESPULSO' : '');
+    const kind = MODES[room?.options.mode ?? '']?.kind, cover = el.children[4] as HTMLElement;
+    let cv = '', cls = 'cover';
+    if (p && !p.al && !p.fr) cv = s.sv ? '💀 ELIMINATO' : 'ESPULSO';
+    else if (p?.fr) { if (kind === 'elimination') { if (p.fr <= s.qq) { cv = `✅ QUALIFICATO!<small>#${p.fr}</small>`; cls = 'cover ok'; } else { cv = `🏁 TROPPO TARDI<small>#${p.fr}</small>`; cls = 'cover late'; } } else { cv = `🏁 TRAGUARDO!<small>#${p.fr}</small>`; cls = 'cover ok'; } }
+    if (cover.className !== cls) cover.className = cls; setTxt(cover, k + 'o', cv);
+    const fz = s.fz, pr = fz > 0 && p ? Math.max(0, Math.min(1, p.z / fz)) : 0;
+    setTxt(el.children[5], k + 'd', !s.sv && fz > 0 && p && p.al && !p.fr ? `🏁 ${Math.max(0, Math.round(fz - p.z))} m` : s.sv && p?.al ? `${s.players.filter((x) => x.al === 1).length} in piedi` : '');
+    (el.children[6].firstElementChild as HTMLElement).style.width = `${(s.sv ? 0 : pr) * 100}%`;
   });
   // leaderboard goes into a spare grid cell (7 players -> 8th cell, 3 players -> 4th cell)
   const bd = $('board');
   if (spare.length) { const r = spare[0]; bd.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`; bd.classList.add('cellboard'); }
   else bd.style.display = 'none';
   setTxt(bd, 'bd', `<div class="bt">${esc(mapName)}<br/>${esc(modeName)} · Round ${s.round + 1}</div>` + order.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:${hexc(ROBOT_COLORS[p.s])}"></i><span>${esc(name(p.s))}</span><em>${p.fr ? '🏁' : p.it ? ICON[p.it] : ''}</em></div>`).join(''));
-  setTxt($('hinfo'), 'hi', `Round ${s.round + 1} · ${s.mp === 'intermission' ? 'prossimo round' : 'tempo'} ${Math.max(0, s.left).toFixed(0)}s`);
+  const kd = MODES[room?.options.mode ?? '']?.kind;
+  const tail = s.sv ? `${s.players.filter((x) => x.al === 1).length} in piedi` : kd === 'elimination' ? `qualificati ${s.qf}/${s.qq}` : `arrivati ${s.qf}/${n}`;
+  setTxt($('hinfo'), 'hi', `Round ${s.round + 1} · ${tail} · ${s.mp === 'intermission' ? 'prossimo round' : 'tempo'} ${Math.max(0, s.left).toFixed(0)}s`);
+  renderFeed(performance.now());
   $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';
 }
 if (SCREEN) {

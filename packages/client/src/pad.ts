@@ -11,6 +11,17 @@ const GAME = 'neon-circuit', ICON: Record<string, string> = { boost: '⚡', seek
 const q = new URLSearchParams(location.search);
 const net = new Net();
 
+// ---- never let the browser zoom/scroll the controller (iOS Safari ignores user-scalable=no) ----
+for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false } as AddEventListenerOptions);
+document.addEventListener('touchmove', (e) => { if (e.touches.length > 1 || ((e as any).scale && (e as any).scale !== 1) || !(e.target as HTMLElement)?.closest?.('input,select')) e.preventDefault(); }, { passive: false });
+let lastTouchEnd = 0;
+// only while playing: the controls use pointer events, whereas menu buttons need their synthesized click (a blocked tap would feel like lag)
+document.addEventListener('touchend', (e) => { const n = Date.now(); if (n - lastTouchEnd < 350 && document.body.classList.contains('playing')) e.preventDefault(); lastTouchEnd = n; }, { passive: false });
+for (const t of ['dblclick', 'contextmenu', 'selectstart']) document.addEventListener(t, (e) => { if (!(e.target as HTMLElement)?.closest?.('input,select')) e.preventDefault(); });
+// the layout viewport can change when browser bars hide/show: keep the page glued to the real visible area
+const fit = () => { document.documentElement.style.setProperty('--vh-px', `${window.visualViewport?.height ?? innerHeight}px`); };
+fit(); window.visualViewport?.addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 250));
+
 let room: RoomInfo | null = null, me = -1, joinedName = '';
 let participants: number[] = [], roundRunning = false, eliminated = false;
 let latest: Snapshot | null = null;
@@ -18,7 +29,7 @@ let mode: 'tilt' | 'stick' = 'stick';
 let lastAngles: Angles | null = null, neutral: Angles = { roll: 0, pitch: 0 }, sensorSeen = false;
 let sx = 0, sy = 0; // smoothed tilt
 const stick = { x: 0, y: 0 };
-let tJump = false, jumpLatch = false, diveLatch = false, useLatch = false, tDive = false;
+let tJump = false, jumpLatch = false, diveLatch = false, useLatch = false, tDive = false, pushLatch = false, tGrab = false;
 
 const show = (id: 'join' | 'wait' | 'play' | 'end') => { for (const s of ['join', 'wait', 'play', 'end']) $(s).classList.toggle('hidden', s !== id); document.body.classList.toggle('playing', id === 'play'); };
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -84,13 +95,18 @@ function onMsg(m: ServerMsg) {
       const p = m.players[me]; if (!p) break;
       if (m.rp === 'countdown') { $('banner').textContent = String(Math.ceil(m.left)); calibrate(); } else if ($('banner').textContent && /^\d$/.test($('banner').textContent!)) $('banner').textContent = '';
       $('bItem').textContent = p.it ? ICON[p.it] : '🎁'; $('bItem').style.opacity = p.it ? '1' : '.4';
+      $('bPush').style.opacity = p.pc > 0 ? '.45' : '1'; $('bPush').textContent = p.gb > 0 ? 'LANCIA!' : 'SPINGI'; $('bGrab').classList.toggle('on', p.gb > 0 || p.sl > 0);
+      $('dist').textContent = m.sv ? '' : m.fz > 0 ? `🏁 ${Math.max(0, Math.round(m.fz - p.z))} m` : '';
       const order = m.players.filter((x) => x.al === 1).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z)); const rk = order.findIndex((x) => x.s === me) + 1;
-      $('rank').textContent = p.al ? `#${rk}/${order.length}` : 'ESPULSO'; $('status').textContent = p.st > 0 ? '💫' : p.bo > 0 ? '⚡' : p.sh > 0 ? '🛡️' : p.rs > 0 ? '⌛' : '';
+      const alive = m.players.filter((x) => x.al === 1).length;
+      $('rank').textContent = p.fr ? `🏁 #${p.fr}` : p.al ? (m.sv ? `${alive} in piedi` : `#${rk}/${order.length}`) : 'ESPULSO'; $('status').textContent = p.st > 0 ? '💫' : p.bo > 0 ? '⚡' : p.sh > 0 ? '🛡️' : p.rs > 0 ? '⌛' : '';
       for (const e of m.ev) {
         if (e.t === 'pickup' && e.slot === me) buzz(30);
         if (e.t === 'impact' && e.victim === me) buzz(e.outcome === 'hit' ? [90, 40, 90] : 40);
         if (e.t === 'finish' && e.slot === me) { buzz([60, 40, 60, 40, 200]); $('banner').textContent = `🏁 #${e.rank}`; setTimeout(() => { if ($('banner').textContent.startsWith('🏁')) $('banner').textContent = ''; }, 2500); }
         if (e.t === 'fall' && e.slot === me) buzz(60);
+        if (e.t === 'grab' && (e.slot === me || e.victim === me)) buzz([40, 30, 40]);
+        if (e.t === 'out' && e.slot === me) { $('banner').textContent = '💀 FUORI!'; buzz([200, 80, 200]); }
       }
       break;
     }
@@ -121,7 +137,7 @@ function renderRoom() {
 $('selMap').onchange = $('selMode').onchange = () => net.send({ k: 'config', map: $<HTMLSelectElement>('selMap').value, mode: $<HTMLSelectElement>('selMode').value });
 $('ready').onclick = () => { const mine = room?.members.find((m) => m.slot === me); calibrate(); net.send({ k: 'ready', ready: !mine?.ready }); };
 $('leave').onclick = () => net.send({ k: 'leave' });
-$('calib').onclick = $('calBtn').onclick = () => { calibrate(); buzz(20); };
+$('calBtn').onclick = () => { calibrate(); buzz(20); };
 $('again').onclick = () => { show('wait'); renderRoom(); };
 $('modeBtn').onclick = async () => {
   if (mode === 'tilt') { mode = 'stick'; syncModeUi(); return; }
@@ -155,6 +171,7 @@ function syncModeUi() {
   zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
   const hold = (id: string, set: (v: boolean) => void, latch: () => void) => { const b = $(id); b.addEventListener('pointerdown', (e) => { b.setPointerCapture(e.pointerId); set(true); latch(); b.classList.add('on'); buzz(8); }); const up = () => { set(false); b.classList.remove('on'); }; b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
   hold('bJump', (v) => { tJump = v; }, () => { jumpLatch = true; }); hold('bDive', (v) => { tDive = v; }, () => { diveLatch = true; }); hold('bItem', () => {}, () => { useLatch = true; });
+  hold('bPush', () => {}, () => { pushLatch = true; }); hold('bGrab', (v) => { tGrab = v; }, () => {});
 }
 
 // ------------------------------------------------------------------ 60 Hz control loop
@@ -163,8 +180,8 @@ function sample(): InputFrame {
   let x = 0, y = 0;
   if (mode === 'tilt' && lastAngles) { const v = tiltToMove(lastAngles, neutral, DEFAULT_TILT); sx = smooth(sx, v.x, DT); sy = smooth(sy, v.y, DT); x = sx; y = sy; }
   else { sx = stick.x; sy = stick.y; x = sx; y = sy; } // joystick: no smoothing => zero added latency
-  const f: InputFrame = { seq: ++seq, mx: -x, mz: y, jump: tJump || jumpLatch, dive: tDive || diveLatch, use: useLatch }; // screen camera looks down +Z: right = -X
-  jumpLatch = diveLatch = useLatch = false; return f;
+  const f: InputFrame = { seq: ++seq, mx: -x, mz: y, jump: tJump || jumpLatch, dive: tDive || diveLatch, use: useLatch, push: pushLatch, grab: tGrab }; // screen camera looks down +Z: right = -X
+  jumpLatch = diveLatch = useLatch = pushLatch = false; return f;
 }
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
@@ -172,7 +189,8 @@ function frame(now: number) {
   if (active) {
     acc += dt;
     while (acc >= DT) { acc -= DT; buf.push(sample()); if (buf.length > 6) buf.shift(); unsent++; }
-    if (unsent > 0 && (unsent >= 2 || now - lastSend >= 30)) { net.send({ k: 'input', frames: buf.slice(-Math.min(6, unsent + 2)) }); unsent = 0; lastSend = now; }
+    // flush on EVERY frame: nothing waits for the next one (each packet repeats 2 older frames for loss protection)
+    if (unsent > 0) { net.send({ k: 'input', frames: buf.slice(-Math.min(6, unsent + 2)) }); unsent = 0; lastSend = now; }
     if (mode === 'tilt') $('dot').style.transform = `translate(${sx * 52}px, ${-sy * 52}px)`;
   } else acc = 0;
   requestAnimationFrame(frame);

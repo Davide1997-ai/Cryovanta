@@ -46,6 +46,8 @@ export interface SnapPlayer {
   cy: number; jb: number; jh: 0 | 1; hf: number; dc: number; dh: 0 | 1; pf: number;
   st: number; bo: number; sh: number; iv: number; rs: number;
   it: ItemKind | null; cp: number; fr: number; al: 0 | 1;
+  /** dirty play: shove cooldown / shoving anim, grab time left, held (slow) time, grab target slot */
+  pc: number; ph: number; gb: number; sl: number; gt: number;
 }
 export interface Snapshot {
   k: 'snap'; tick: number;
@@ -57,6 +59,10 @@ export interface Snapshot {
   sk: { id: number; x: number; y: number; z: number; o: number; t: number }[];
   hz: { id: number; x: number; y: number; z: number; o: number; a: 0 | 1 }[];
   ev: SimEvent[];
+  /** qualification counter: how many already crossed the line / quota (elimination: how many pass) */
+  qf: number; qq: number;
+  /** finish line z (so a phone can show progress without knowing the map) and survival flag */
+  fz: number; sv: 0 | 1;
 }
 export interface RoundStart { k: 'round'; round: number; seed: number; participants: number[]; qualify: number; tick: number; map: string; mode: string; difficulty: number; }
 export interface RoundEnd { k: 'roundEnd'; qualified: number[]; eliminated: number[]; }
@@ -81,7 +87,7 @@ export function parseInputFrames(raw: unknown): InputFrame[] | null {
     if (!isObj(f)) return null;
     const seq = num(f.seq, 0, 2 ** 31), mx = num(f.mx, -2, 2), mz = num(f.mz, -2, 2);
     if (seq === null || !Number.isInteger(seq) || mx === null || mz === null) return null;
-    out.push({ seq, mx, mz, jump: f.jump === true, dive: f.dive === true, use: f.use === true });
+    out.push({ seq, mx, mz, jump: f.jump === true, dive: f.dive === true, use: f.use === true, push: f.push === true, grab: f.grab === true });
   }
   return out;
 }
