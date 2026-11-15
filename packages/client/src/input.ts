@@ -3,7 +3,11 @@ export class Input {
   private keys = new Set<string>();
   private useQueued = false;
   camYaw = 0; // radians, + rotates view to the right
+  /** touch state (virtual stick + buttons) */
+  private stick = { x: 0, y: 0 };
+  private tJump = false; private tDive = false;
   constructor(canvas: HTMLElement) {
+    this.initTouch();
     addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       this.keys.add(e.code);
@@ -18,9 +22,9 @@ export class Input {
   }
   /** Sample once per sim tick. `use` is a one-tick pulse (the sim edge-detects anyway). */
   sample() {
-    let x = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0);
-    let y = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0);
-    let jump = this.down('Space'), dive = this.down('ShiftLeft', 'ShiftRight'), use = this.useQueued;
+    let x = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0) + this.stick.x;
+    let y = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0) + this.stick.y;
+    let jump = this.down('Space') || this.tJump, dive = this.down('ShiftLeft', 'ShiftRight') || this.tDive, use = this.useQueued;
     const gp = navigator.getGamepads?.()[0];
     if (gp) {
       const ax = Math.abs(gp.axes[0]) > 0.15 ? gp.axes[0] : 0, ay = Math.abs(gp.axes[1]) > 0.15 ? -gp.axes[1] : 0;
@@ -34,4 +38,35 @@ export class Input {
     return { mx, mz, jump, dive, use };
   }
   private down(...codes: string[]) { return codes.some((c) => this.keys.has(c)); }
+
+  /** Floating left-thumb stick + JUMP / DIVE / ITEM buttons (pointer events => true multi-touch). */
+  private initTouch() {
+    const root = document.getElementById('touch'); if (!root) return;
+    const zone = root.querySelector<HTMLElement>('#stickZone')!, base = root.querySelector<HTMLElement>('#stickBase')!, knob = root.querySelector<HTMLElement>('#stickKnob')!;
+    const R = 62; let sid = -1, ox = 0, oy = 0;
+    zone.addEventListener('pointerdown', (e) => {
+      if (sid !== -1) return; sid = e.pointerId; zone.setPointerCapture(sid); ox = e.clientX; oy = e.clientY;
+      base.style.display = 'block'; base.style.left = ox + 'px'; base.style.top = oy + 'px'; knob.style.transform = 'translate(-50%,-50%)';
+    });
+    zone.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== sid) return;
+      let dx = e.clientX - ox, dy = e.clientY - oy; const l = Math.hypot(dx, dy);
+      if (l > R) { dx = (dx / l) * R; dy = (dy / l) * R; }
+      knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      const k = Math.hypot(dx, dy) / R, dead = k < 0.12 ? 0 : k; // small dead-zone
+      this.stick.x = l ? (dx / R) * (dead / k || 0) : 0; this.stick.y = l ? (-dy / R) * (dead / k || 0) : 0;
+    });
+    const end = (e: PointerEvent) => { if (e.pointerId !== sid) return; sid = -1; this.stick.x = this.stick.y = 0; base.style.display = 'none'; };
+    zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
+    const hold = (id: string, set: (v: boolean) => void) => {
+      const b = root.querySelector<HTMLElement>('#' + id)!;
+      b.addEventListener('pointerdown', (e) => { b.setPointerCapture(e.pointerId); set(true); b.classList.add('on'); });
+      const up = () => { set(false); b.classList.remove('on'); };
+      b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
+    };
+    hold('bJump', (v) => { this.tJump = v; }); hold('bDive', (v) => { this.tDive = v; });
+    const item = root.querySelector<HTMLElement>('#bItem')!;
+    item.addEventListener('pointerdown', () => { this.useQueued = true; item.classList.add('on'); });
+    item.addEventListener('pointerup', () => item.classList.remove('on')); item.addEventListener('pointercancel', () => item.classList.remove('on'));
+  }
 }

@@ -14,6 +14,17 @@ npm test               # 44 test: fisica, impatti, lobby/cap, match completo via
 npm run typecheck
 ```
 
+### Giocare con gli smartphone (fino a 7 giocatori, stessa Wi-Fi)
+
+```bash
+npm run lan
+```
+
+Costruisce il client e avvia il server, che stampa gli indirizzi, ad esempio `http://192.168.1.20:8080`.
+Ogni telefono apre quell'indirizzo nel browser (stessa Wi-Fi del PC), scrive un nome e preme **Partita rapida** → **Pronto!**.
+Sul telefono compaiono joystick virtuale (pollice sinistro), **SALTA**, **TUFFO** e il pulsante oggetto; tieni il telefono in orizzontale.
+Se Windows chiede di consentire Node nel firewall, accetta per le reti private. PC e telefoni possono giocare insieme nella stessa stanza.
+
 ### App desktop (.exe, offline)
 
 ```bash

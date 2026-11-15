@@ -2,7 +2,8 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="theme-color" content="#070816" />
   <title>Cryovanta — Neon Circuit</title>
   <style>
     :root { --neon:#00e5ff; --pink:#ff3df2; --bg:#070816; --panel:rgba(14,16,40,.78); }
@@ -27,6 +28,25 @@
     #hud .item { position:absolute; left:50%; top:14px; transform:translateX(-50%); width:84px; height:84px; border-radius:20px; display:grid; place-items:center; font-size:34px; border:2px solid var(--neon); background:rgba(0,0,0,.45); box-shadow:0 0 18px var(--neon); }
     #hud .big { position:absolute; left:50%; top:38%; transform:translate(-50%,-50%); font-size:84px; font-weight:900; text-shadow:0 0 30px var(--pink); }
     #hud .toast { position:absolute; left:50%; bottom:16%; transform:translateX(-50%); font-size:26px; font-weight:800; text-shadow:0 0 14px var(--neon); }
+    html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+    input { -webkit-user-select: text; user-select: text; font-size: 16px; }
+    #touch { position:fixed; inset:0; display:none; z-index:5; pointer-events:none; }
+    body.touch.playing #touch { display:block; } body.touch #keys { display:none; }
+    #stickZone { position:absolute; left:0; top:35%; width:55%; bottom:0; pointer-events:auto; }
+    #stickBase { display:none; position:fixed; width:130px; height:130px; margin:-65px 0 0 -65px; border-radius:50%; border:2px solid rgba(0,229,255,.7); background:rgba(0,229,255,.12); box-shadow:0 0 18px rgba(0,229,255,.4); pointer-events:none; }
+    #stickKnob { position:absolute; left:50%; top:50%; width:54px; height:54px; border-radius:50%; transform:translate(-50%,-50%); background:rgba(0,229,255,.55); box-shadow:0 0 14px #00e5ff; }
+    .tb { position:absolute; pointer-events:auto; border-radius:50%; display:grid; place-items:center; font-weight:900; letter-spacing:.04em; border:2px solid var(--neon); background:rgba(0,10,30,.55); color:#e8f0ff; box-shadow:0 0 16px rgba(0,229,255,.45); }
+    .tb.on { background:rgba(0,229,255,.55); transform:scale(.94); }
+    #bJump { right:calc(22px + env(safe-area-inset-right)); bottom:calc(26px + env(safe-area-inset-bottom)); width:104px; height:104px; font-size:17px; }
+    #bDive { right:calc(140px + env(safe-area-inset-right)); bottom:calc(20px + env(safe-area-inset-bottom)); width:72px; height:72px; font-size:13px; border-color:var(--pink); box-shadow:0 0 16px rgba(255,61,242,.45); }
+    #bItem { right:calc(46px + env(safe-area-inset-right)); bottom:calc(148px + env(safe-area-inset-bottom)); width:80px; height:80px; font-size:30px; border-color:#ffb020; box-shadow:0 0 16px rgba(255,176,32,.5); }
+    @media (max-height: 520px) {
+      #lobby { top:3vh; transform:translateX(-50%); width:min(760px,96vw); padding:10px 14px; }
+      h1 { font-size:20px; } h1 small { font-size:10px; }
+      #members { grid-template-columns:1fr 1fr; gap:4px; margin-top:6px; } #members li { padding:5px 10px; font-size:14px; }
+      .row { margin-top:6px; } input, button { padding:7px 12px; }
+    }
+    @media (max-height: 520px) { #lobby { max-height: 94vh; overflow:auto; } #hud .big { font-size:56px; } #hud .item { width:60px; height:60px; font-size:24px; } }
     #net { position:fixed; right:10px; bottom:8px; font:11px ui-monospace, monospace; opacity:.55; }
     #keys { position:fixed; left:12px; bottom:8px; font-size:12px; opacity:.55; }
   </style>
@@ -52,6 +72,8 @@
     <div class="tl" id="hrank"></div><div class="tr" id="hinfo"></div>
     <div class="item" id="hitem"></div><div class="big" id="hbig"></div><div class="toast" id="htoast"></div>
   </div>
+  <div id="touch"><div id="stickZone"><div id="stickBase"><div id="stickKnob"></div></div></div>
+    <div class="tb" id="bItem">🎁</div><div class="tb" id="bDive">TUFFO</div><div class="tb" id="bJump">SALTA</div></div>
   <div id="keys">WASD/frecce muovi · SPAZIO salta (tieni premuto in aria = propulsore) · SHIFT tuffo · E / click usa oggetto</div>
   <div id="net"></div>
   <script type="module" src="/src/main.ts"></script>

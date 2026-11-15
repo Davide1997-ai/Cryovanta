@@ -12,6 +12,8 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const GAME = 'neon-circuit';
 const ICON: Record<string, string> = { boost: '⚡', seeker: '🎯', hazard: '🧱', shield: '🛡️' };
 
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+if (isTouch) document.body.classList.add('touch');
 const canvas = $<HTMLCanvasElement>('c');
 const stage = new Stage(canvas);
 const input = new Input(canvas);
@@ -32,6 +34,7 @@ function renderRoom() {
   const lobbyEl = $('lobby'), playing = room?.phase === 'playing';
   lobbyEl.style.display = playing ? 'none' : '';
   $('hud').style.display = playing ? 'block' : 'none';
+  document.body.classList.toggle('playing', !!playing);
   $('menu').style.display = room ? 'none' : '';
   $('room').style.display = room ? '' : 'none';
   if (!room) return;
@@ -46,7 +49,8 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 $('quick').onclick = () => start(() => net.send({ k: 'quickplay', game: GAME }));
 $('create').onclick = () => start(() => net.send({ k: 'create', game: GAME, isPrivate: true }));
 $('join').onclick = () => start(() => net.send({ k: 'join', code: ($<HTMLInputElement>('code').value || '').toUpperCase() }));
-$('ready').onclick = () => { const mine = room?.members.find((m) => m.slot === me); net.send({ k: 'ready', ready: !mine?.ready }); };
+$('ready').onclick = () => {
+  if (isTouch) { document.documentElement.requestFullscreen?.().catch(() => {}); (navigator as any).wakeLock?.request('screen').catch(() => {}); (screen.orientation as any)?.lock?.('landscape').catch(() => {}); } const mine = room?.members.find((m) => m.slot === me); net.send({ k: 'ready', ready: !mine?.ready }); };
 $('leave').onclick = () => { net.send({ k: 'leave' }); $('results').style.display = 'none'; };
 
 let connected = false;
@@ -180,6 +184,7 @@ function hud(s: Snapshot) {
   $('hinfo').innerHTML = `Round ${s.round + 1}<br/>${s.mp === 'intermission' ? 'Prossimo round' : 'Tempo'} ${Math.max(0, s.left).toFixed(0)}s`;
   const mine = predictor && s.players[me] ? s.players[me].it : null;
   $('hitem').textContent = mine ? ICON[mine] : '';
+  $('bItem').textContent = mine ? ICON[mine] : '🎁'; $('bItem').style.opacity = mine ? '1' : '.45';
   $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';
 }
 

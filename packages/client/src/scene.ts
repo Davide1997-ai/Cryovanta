@@ -19,10 +19,12 @@ export class Stage {
   boxMeshes: THREE.Object3D[] = [];
   private course: Course | null = null;
   private time = 0;
+  /** phones/tablets: no post-processing, lower pixel ratio (battery + 7-player load) */
+  readonly lite = matchMedia('(pointer: coarse)').matches;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.lite ? 1.25 : 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 0.85;
     const pm = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; // clean studio reflections => "toy plastic / chrome" look
@@ -129,5 +131,5 @@ export class Stage {
     });
   }
 
-  render() { this.composer.render(); }
+  render() { if (this.lite) this.renderer.render(this.scene, this.camera); else this.composer.render(); }
 }

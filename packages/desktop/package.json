@@ -10,7 +10,8 @@
     "bundle": "node build.mjs",
     "dev": "npm run bundle && electron .",
     "dist:win": "npm run bundle && electron-builder --win portable nsis --x64 --publish never",
-    "dist:dir": "npm run bundle && electron-builder --dir --publish never"
+    "dist:dir": "npm run bundle && electron-builder --dir --publish never",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "electron": "33.4.11",

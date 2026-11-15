@@ -14,7 +14,9 @@
     "test": "vitest run",
     "build": "npm -w @cryovanta/client run build",
     "desktop": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dev",
-    "dist:win": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dist:win"
+    "dist:win": "npm -w @cryovanta/client run build && npm -w @cryovanta/desktop run dist:win",
+    "lan": "npm run build && npm run start:server",
+    "start:server": "npm -w @cryovanta/server run start"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
