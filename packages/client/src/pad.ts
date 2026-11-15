@@ -51,9 +51,7 @@ $<HTMLInputElement>('code').value = (q.get('room') ?? '').toUpperCase();
 $('enter').onclick = async () => {
   const name = $<HTMLInputElement>('name').value.trim() || 'Robot' + Math.floor(Math.random() * 90 + 10); localStorage.setItem('cv-name', name);
   const code = $<HTMLInputElement>('code').value.trim().toUpperCase(); $('err').textContent = ''; joinedName = name;
-  const sens = await enableSensors(); // must run inside the tap (iOS asks for permission here)
-  mode = sens === 'ok' ? 'tilt' : 'stick'; syncModeUi();
-  if (sens !== 'ok') explainNoSensors(sens);
+  mode = 'stick'; syncModeUi(); // joystick is the default; tilt is an opt-in experiment (button below the stick)
   document.documentElement.requestFullscreen?.().catch(() => {}); (navigator as any).wakeLock?.request('screen').catch(() => {}); (screen.orientation as any)?.lock?.('landscape').catch(() => {});
   try { await net.connect(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`, name); } catch { return void ($('err').textContent = 'Server non raggiungibile'); }
   net.onMsg = onMsg; net.onClose = () => void reconnect(name);
@@ -125,17 +123,36 @@ $('ready').onclick = () => { const mine = room?.members.find((m) => m.slot === m
 $('leave').onclick = () => net.send({ k: 'leave' });
 $('calib').onclick = $('calBtn').onclick = () => { calibrate(); buzz(20); };
 $('again').onclick = () => { show('wait'); renderRoom(); };
-$('modeBtn').onclick = () => { if (mode === 'stick' && sensorSeen) mode = 'tilt'; else mode = 'stick'; if (mode === 'tilt') calibrate(); syncModeUi(); };
-function syncModeUi() { $('modeBtn').textContent = mode === 'tilt' ? 'Joystick' : 'Inclinazione'; $('stickZone').style.display = mode === 'stick' ? 'block' : 'none'; $('ringLbl').textContent = mode === 'tilt' ? 'inclina per muoverti' : 'trascina qui'; }
+$('modeBtn').onclick = async () => {
+  if (mode === 'tilt') { mode = 'stick'; syncModeUi(); return; }
+  const r = await enableSensors(); // inside the tap: iOS shows its permission prompt here
+  if (r === 'ok') { mode = 'tilt'; calibrate(); } else { void explainNoSensors(r); alert(r === 'insecure' ? 'L\'inclinazione richiede HTTPS: apri l\'indirizzo https del joypad (il browser mostrerà un avviso).' : 'Sensori non disponibili o permesso negato: resti sul joystick.'); }
+  syncModeUi();
+};
+function syncModeUi() {
+  const tilt = mode === 'tilt';
+  $('modeBtn').textContent = tilt ? '🕹️ Joystick' : '📱 Inclinazione (beta)'; $('stickZone').style.display = tilt ? 'none' : 'block';
+  $('ring').style.display = tilt ? 'block' : 'none'; $('ringLbl').style.display = tilt ? 'block' : 'none'; $('calBtn').style.display = tilt ? 'block' : 'none'; $('stickHint').style.display = tilt ? 'none' : 'block';
+}
 
-// ------------------------------------------------------------------ touch: buttons + fallback stick
+// ------------------------------------------------------------------ touch: floating joystick + buttons
 {
-  const zone = $('stickZone'), ring = $('ring'), dot = $('dot'); let sid = -1, ox = 0, oy = 0; const R = 62;
-  zone.addEventListener('pointerdown', (e) => { if (sid !== -1) return; sid = e.pointerId; zone.setPointerCapture(sid); const r = ring.getBoundingClientRect(); ox = r.left + r.width / 2; oy = r.top + r.height / 2; moveStick(e); });
-  const moveStick = (e: PointerEvent) => { const ev = e.getCoalescedEvents?.().pop() ?? e; let dx = ev.clientX - ox, dy = ev.clientY - oy; const l = Math.hypot(dx, dy); if (l > R) { dx = dx / l * R; dy = dy / l * R; } stick.x = dx / R; stick.y = -dy / R; };
-  zone.addEventListener('pointermove', (e) => { if (e.pointerId === sid) moveStick(e); });
-  const end = (e: PointerEvent) => { if (e.pointerId !== sid) return; sid = -1; stick.x = stick.y = 0; }; zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
-  (window as any).__dot = dot;
+  const zone = $('stickZone'), base = $('stickBase'), knob = $('stickKnob'); let sid = -1, ox = 0, oy = 0; const R = 72;
+  zone.addEventListener('pointerdown', (e) => {
+    if (sid !== -1 || mode !== 'stick') return; sid = e.pointerId; zone.setPointerCapture(sid); ox = e.clientX; oy = e.clientY;
+    $('stickHint').style.display = 'none'; base.style.display = 'block'; base.style.left = ox + 'px'; base.style.top = oy + 'px'; knob.style.transform = 'translate(-50%,-50%)'; stick.x = stick.y = 0; buzz(6);
+  });
+  zone.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== sid) return;
+    const ev = e.getCoalescedEvents?.().pop() ?? e; // newest finger position, never a stale one
+    let dx = ev.clientX - ox, dy = ev.clientY - oy; const l = Math.hypot(dx, dy);
+    if (l > R) { dx = (dx / l) * R; dy = (dy / l) * R; }
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    const k = Math.hypot(dx, dy) / R, dz = 0.08, n = k < dz ? 0 : Math.pow((k - dz) / (1 - dz), 1.15); // tiny dead-zone, almost linear
+    stick.x = k ? (dx / R / k) * n : 0; stick.y = k ? (-dy / R / k) * n : 0;
+  });
+  const end = (e: PointerEvent) => { if (e.pointerId !== sid) return; sid = -1; stick.x = stick.y = 0; base.style.display = 'none'; if (mode === 'stick') $('stickHint').style.display = 'block'; };
+  zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
   const hold = (id: string, set: (v: boolean) => void, latch: () => void) => { const b = $(id); b.addEventListener('pointerdown', (e) => { b.setPointerCapture(e.pointerId); set(true); latch(); b.classList.add('on'); buzz(8); }); const up = () => { set(false); b.classList.remove('on'); }; b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
   hold('bJump', (v) => { tJump = v; }, () => { jumpLatch = true; }); hold('bDive', (v) => { tDive = v; }, () => { diveLatch = true; }); hold('bItem', () => {}, () => { useLatch = true; });
 }
@@ -145,7 +162,7 @@ let acc = 0, last = performance.now(), seq = 0, unsent = 0, lastSend = 0; const 
 function sample(): InputFrame {
   let x = 0, y = 0;
   if (mode === 'tilt' && lastAngles) { const v = tiltToMove(lastAngles, neutral, DEFAULT_TILT); sx = smooth(sx, v.x, DT); sy = smooth(sy, v.y, DT); x = sx; y = sy; }
-  else { sx = smooth(sx, stick.x, DT, 0.03); sy = smooth(sy, stick.y, DT, 0.03); x = sx; y = sy; }
+  else { sx = stick.x; sy = stick.y; x = sx; y = sy; } // joystick: no smoothing => zero added latency
   const f: InputFrame = { seq: ++seq, mx: -x, mz: y, jump: tJump || jumpLatch, dive: tDive || diveLatch, use: useLatch }; // screen camera looks down +Z: right = -X
   jumpLatch = diveLatch = useLatch = false; return f;
 }
@@ -156,7 +173,7 @@ function frame(now: number) {
     acc += dt;
     while (acc >= DT) { acc -= DT; buf.push(sample()); if (buf.length > 6) buf.shift(); unsent++; }
     if (unsent > 0 && (unsent >= 2 || now - lastSend >= 30)) { net.send({ k: 'input', frames: buf.slice(-Math.min(6, unsent + 2)) }); unsent = 0; lastSend = now; }
-    $('dot').style.transform = `translate(${sx * 52}px, ${-sy * 52}px)`;
+    if (mode === 'tilt') $('dot').style.transform = `translate(${sx * 52}px, ${-sy * 52}px)`;
   } else acc = 0;
   requestAnimationFrame(frame);
 }

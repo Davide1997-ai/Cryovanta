@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import qrcode from 'qrcode-generator';
 import {
-  DT, INTERP_DELAY_MS, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
+  DT, INTERP_DELAY_MS, SNAPSHOT_EVERY, TICK_RATE, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
   type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
 } from '@cryovanta/shared';
 import { Input } from './input';
+import { layoutCells } from './layout';
 import { Net } from './net';
 import { Robot, ROBOT_COLORS } from './robot';
 import { Stage } from './scene';
@@ -16,6 +17,7 @@ const ICON: Record<string, string> = { boost: '⚡', seeker: '🎯', hazard: '�
 /** Big-screen mode (?screen): shows the game + QR, phones are the joypads. */
 const SCREEN = new URLSearchParams(location.search).has('screen');
 if (SCREEN) document.body.classList.add('screen');
+if (new URLSearchParams(location.search).has('debug')) document.body.classList.add('debug');
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 if (isTouch) document.body.classList.add('touch');
 const canvas = $<HTMLCanvasElement>('c');
@@ -30,7 +32,10 @@ let predictor: Predictor | null = null;
 let snaps: { t: number; s: Snapshot }[] = [];
 let participants: number[] = [];
 /** Adaptive jitter buffer: widens when Wi-Fi delivers snapshots in bursts, shrinks again when it calms down. */
-let interpDelay = INTERP_DELAY_MS, snapGap = 50, lastSnapT = 0;
+const SNAP_MS = (1000 * SNAPSHOT_EVERY) / TICK_RATE;
+/** The big screen has no prediction, so it uses the smallest safe buffer (2 snapshots + margin); the jitter estimate widens it when Wi-Fi is bursty. */
+const MIN_DELAY = SCREEN ? Math.round(SNAP_MS * 2 + 25) : INTERP_DELAY_MS;
+let interpDelay = MIN_DELAY, snapGap = 0 /* EWMA of |arrival gap - nominal| = jitter (ms) */, lastSnapT = 0;
 let toastTimer = 0;
 let inGameView = false;
 let mapName = '', modeName = '';
@@ -114,9 +119,9 @@ function onMsg(m: ServerMsg) {
     }
     case 'snap': {
       const nowT = performance.now();
-      if (lastSnapT) { const gap = nowT - lastSnapT; snapGap = snapGap * 0.9 + Math.abs(gap - 50) * 0.1; }
+      if (lastSnapT) { const gap = nowT - lastSnapT; snapGap = snapGap * 0.9 + Math.abs(gap - SNAP_MS) * 0.1; }
       lastSnapT = nowT;
-      interpDelay += (Math.min(260, Math.max(INTERP_DELAY_MS, 90 + snapGap * 3)) - interpDelay) * 0.05;
+      interpDelay += (Math.min(260, MIN_DELAY + snapGap * 3) - interpDelay) * 0.05;
       snaps.push({ t: nowT, s: m }); if (snaps.length > 40) snaps.shift();
       predictor?.reconcile(m);
       for (const e of m.ev) {
@@ -143,8 +148,12 @@ function onMsg(m: ServerMsg) {
 
 // ------------------------------------------------------------------ main loop
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
-(window as any).__cv = { freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
+(window as any).__cv = { get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
+interface PlayerCam { cam: THREE.PerspectiveCamera; pos: THREE.Vector3; look: THREE.Vector3; init: boolean; baseY: number }
+const playerCams: PlayerCam[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => ({ cam: new THREE.PerspectiveCamera(60, 1, 0.1, 1800), pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, baseY: 0 }));
+const tmpV2 = new THREE.Vector3();
+const robotPos: THREE.Vector3[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => new THREE.Vector3());
 const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3(), tmpV = new THREE.Vector3();
 const seekerMeshes = new Map<number, THREE.Object3D>(), hazardMeshes = new Map<number, THREE.Object3D>();
 const seekerGeo = new THREE.OctahedronGeometry(0.35), seekerMat = new THREE.MeshStandardMaterial({ color: 0x220008, emissive: 0xff2244, emissiveIntensity: 3, metalness: 0.6, roughness: 0.2 });
@@ -183,6 +192,8 @@ function render(dt: number, now: number) {
   stage.adaptQuality(fps || 60, dt);
   const br = pickBracket(now - interpDelay);
   const latest = snaps[snaps.length - 1]?.s;
+  const splitting = SCREEN && inGameView && room?.phase === 'playing' && !!latest && participants.length > 0;
+  stage.setSplit(splitting, participants.length);
   const dynTick = predictor?.running ? predictor.tick : (latest?.tick ?? 0);
   stage.syncPlatforms(dynTick);
   stage.syncDynamic(dynTick, dt, camLook);
@@ -195,17 +206,18 @@ function render(dt: number, now: number) {
         ps = { ...encodePlayer(p), it: latest.players[s].it };
         pos = { x: p.x + sm.x, y: p.y + sm.y, z: p.z + sm.z };
       }
-      robots[s].update(dt, ps, pos, stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
+      robotPos[s].set(pos.x, pos.y, pos.z);
+      robots[s].update(dt, ps, pos, splitting ? 0 : stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
       stage.blob(s, pos.x, pos.y, pos.z, ps.al === 1 && ps.rs <= 0, dynTick);
     }
     stage.animate(dt, latest.bx);
     syncProjectiles(br);
-    if (SCREEN) board(latest); else hud(latest);
-    follow(dt, latest);
+    if (SCREEN) { if (splitting) splitFrame(dt, latest); else hideCells(); } else hud(latest);
+    if (!splitting) follow(dt, latest);
   }
   if (now > toastTimer) $('htoast').textContent = '';
   $('net').textContent = `${fps.toFixed(0)}fps · ${stage.renderer.info.render.calls} calls · rtt ${net.rtt.toFixed(0)}ms · buf ${interpDelay.toFixed(0)}ms · err ${(predictor?.lastError ?? 0).toFixed(2)}u · pending ${predictor?.pending.length ?? 0}`;
-  stage.render();
+  if (!splitting) stage.render();
 }
 
 function syncProjectiles(br: NonNullable<ReturnType<typeof pickBracket>>) {
@@ -256,7 +268,7 @@ function follow(dt: number, s: Snapshot) {
 // idle backdrop for the lobby: slow orbit over a demo course until a round starts
 stage.buildCourse(buildMap('titan-gauntlet', 11, 0.5));
 function lobbySpin(t: number) {
-  if (predictor || inGameView) return;
+  if (predictor || (SCREEN ? inGameView && room?.phase === 'playing' : inGameView)) return;
   stage.camera.position.set(Math.sin(t / 7000) * 22, 9, -20 + Math.cos(t / 7000) * 5);
   stage.camera.lookAt(0, 2, 30); const tk = Math.floor(t / 16.6); stage.syncPlatforms(tk); stage.syncDynamic(tk, 0.016, { x: 0, y: 2, z: 20 });
 }
@@ -266,12 +278,13 @@ requestAnimationFrame(frame);
 // ------------------------------------------------------------------ big-screen mode
 let info: { ips: string[]; port: number; httpsPort: number | null } | null = null, qrFor = '';
 function joinUrl(code: string) {
+  // plain HTTP: no certificate warning on the phone (HTTPS is only needed for the optional tilt control)
   const host = info?.ips[0] ?? location.hostname;
-  return info?.httpsPort ? `https://${host}:${info.httpsPort}/pad.html?room=${code}` : `http://${host}:${info?.port ?? location.port}/pad.html?room=${code}`;
+  return `http://${host}:${info?.port ?? location.port}/pad.html?room=${code}`;
 }
 function renderScreen() {
   const playing = room?.phase === 'playing';
-  $('screenPanel').style.display = playing ? 'none' : 'block'; $('board').style.display = playing ? 'block' : 'none'; $('hud').style.display = playing ? 'block' : 'none';
+  $('screenPanel').style.display = playing ? 'none' : 'block'; $('hud').style.display = playing ? 'block' : 'none'; if (!playing) hideCells();
   if (!room) return;
   const url = joinUrl(room.code);
   if (qrFor !== url) { qrFor = url; const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); $('joinUrl').textContent = url.replace(/^https?:\/\//, '').replace('/pad.html', '/…'); }
@@ -284,11 +297,59 @@ function renderScreen() {
   $('sDesc').textContent = (room.options.map === 'random' ? 'Ogni round una mappa diversa. ' : MAPS[room.options.map]?.desc + ' ') + (MODES[room.options.mode]?.desc ?? '');
   ($('sStart') as HTMLButtonElement).disabled = room.members.length < 2 || room.phase !== 'lobby';
 }
-function board(s: Snapshot) {
+// ---- split screen: one camera + one HUD cell per player ----
+const cellEls: HTMLElement[] = [];
+const cache = new Map<string, string>();
+const setTxt = (el: Element, key: string, v: string) => { if (cache.get(key) !== v) { cache.set(key, v); el.innerHTML = v; } };
+const hexc = (n: number) => '#' + n.toString(16).padStart(6, '0');
+function hideCells() { $('cells').style.display = 'none'; $('board').style.display = 'none'; }
+
+function followCam(pc: PlayerCam, tgt: THREE.Vector3, dt: number) {
+  const back = 9.2, up = 5.2, k = 1 - Math.exp(-7 * dt), kl = 1 - Math.exp(-10 * dt);
+  const dx = tgt.x, dy = tgt.y + up, dz = tgt.z - back;
+  if (!pc.init) { pc.pos.set(dx, dy, dz); pc.look.set(tgt.x, tgt.y + 1.4, tgt.z + 5); pc.init = true; }
+  pc.pos.x += (dx - pc.pos.x) * k; pc.pos.y += (dy - pc.pos.y) * k; pc.pos.z += (dz - pc.pos.z) * k;
+  pc.look.x += (tgt.x - pc.look.x) * kl; pc.look.y += (tgt.y + 1.4 - pc.look.y) * kl; pc.look.z += (tgt.z + 5 - pc.look.z) * kl;
+  pc.cam.position.copy(pc.pos); pc.cam.lookAt(pc.look);
+}
+
+function splitFrame(dt: number, s: Snapshot) {
+  const slots = [...participants].sort((a, b) => a - b), n = slots.length;
+  const { cells, spare } = layoutCells(n, innerWidth, innerHeight, 4);
+  const order = s.players.filter((p) => p.al === 1 || p.fr > 0).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z));
+  const leader = order[0] ? robotPos[order[0].s] : robotPos[slots[0]];
   const name = (slot: number) => room?.members.find((m) => m.slot === slot)?.name ?? `P${slot + 1}`;
-  const rows = s.players.filter((p) => p.al === 1 || p.fr > 0).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z));
-  $('board').innerHTML = rows.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:#${ROBOT_COLORS[p.s].toString(16).padStart(6, '0')}"></i><span>${esc(name(p.s))}</span><em>${p.fr ? '🏁' : p.it ? ICON[p.it] : ''}${p.st > 0 ? '💫' : p.sh > 0 ? '🛡️' : p.bo > 0 ? '⚡' : ''}</em></div>`).join('');
-  $('hinfo').innerHTML = `${esc(mapName)} · ${esc(modeName)}<br/>Round ${s.round + 1}<br/>${s.mp === 'intermission' ? 'Prossimo round' : 'Tempo'} ${Math.max(0, s.left).toFixed(0)}s`;
+
+  const views = slots.map((slot, i) => {
+    const pc = playerCams[slot], p = s.players[slot];
+    // an eliminated player's cell spectates the leader; a falling robot is watched from the last ground height (no chasing into the void)
+    const tgt = tmpV2.copy(p && p.al === 1 ? robotPos[slot] : leader);
+    if (!p || p.al !== 1 || p.g === 1 || !pc.init) pc.baseY = tgt.y; else tgt.y = Math.max(tgt.y, pc.baseY);
+    followCam(pc, tgt, dt);
+    return { cam: pc.cam, rect: cells[i], before: () => { stage.focusView(pc.cam); for (let r = 0; r < robots.length; r++) robots[r].setDetail(pc.cam.position.distanceTo(robotPos[r]) < 24); } };
+  });
+  stage.renderViews(views);
+
+  // ---- HUD overlay, one per cell ----
+  const host = $('cells'); host.style.display = 'block';
+  while (cellEls.length < n) { const d = document.createElement('div'); d.className = 'cell'; d.innerHTML = '<div class="cname"></div><div class="crank"></div><div class="cstat"></div><div class="citem"></div><div class="cover"></div>'; host.appendChild(d); cellEls.push(d); }
+  cellEls.forEach((el, i) => (el.style.display = i < n ? 'block' : 'none'));
+  slots.forEach((slot, i) => {
+    const el = cellEls[i], r = cells[i], p = s.players[slot], k = `c${i}`;
+    el.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--c:${hexc(ROBOT_COLORS[slot])}`;
+    const rk = order.findIndex((o) => o.s === slot) + 1;
+    setTxt(el.children[0], k + 'n', esc(name(slot)));
+    setTxt(el.children[1], k + 'r', p?.fr ? '🏁 #' + p.fr : p?.al ? `#${rk}/${order.length}` : '');
+    setTxt(el.children[2], k + 's', p ? (p.st > 0 ? '💫' : p.sh > 0 ? '🛡️' : p.bo > 0 ? '⚡' : p.rs > 0 ? '⌛' : '') : '');
+    setTxt(el.children[3], k + 'i', p?.it ? ICON[p.it] : '');
+    setTxt(el.children[4], k + 'o', p && !p.al && !p.fr ? 'ESPULSO' : '');
+  });
+  // leaderboard goes into a spare grid cell (7 players -> 8th cell, 3 players -> 4th cell)
+  const bd = $('board');
+  if (spare.length) { const r = spare[0]; bd.style.cssText = `display:block;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`; bd.classList.add('cellboard'); }
+  else bd.style.display = 'none';
+  setTxt(bd, 'bd', `<div class="bt">${esc(mapName)}<br/>${esc(modeName)} · Round ${s.round + 1}</div>` + order.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:${hexc(ROBOT_COLORS[p.s])}"></i><span>${esc(name(p.s))}</span><em>${p.fr ? '🏁' : p.it ? ICON[p.it] : ''}</em></div>`).join(''));
+  setTxt($('hinfo'), 'hi', `Round ${s.round + 1} · ${s.mp === 'intermission' ? 'prossimo round' : 'tempo'} ${Math.max(0, s.left).toFixed(0)}s`);
   $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';
 }
 if (SCREEN) {

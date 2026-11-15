@@ -4,8 +4,8 @@ export const MIN_PLAYERS_TO_START = 2;
 
 export const TICK_RATE = 60;
 export const DT = 1 / TICK_RATE;
-/** Server -> client snapshot every N sim ticks (60/3 = 20 Hz). */
-export const SNAPSHOT_EVERY = 3;
+/** Server -> client snapshot every N sim ticks (60/2 = 30 Hz: the big screen has no prediction, so a faster stream = lower visual latency). */
+export const SNAPSHOT_EVERY = 2;
 /** Remote entities are rendered this far in the past so we can always interpolate between 2 snapshots. */
 export const INTERP_DELAY_MS = 110;
 /** Max unprocessed inputs the server will queue per player (anti input-flood / anti speedhack). */

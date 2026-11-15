@@ -23,31 +23,31 @@ apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--por
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 95 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 105 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
-### Telefoni come joypad (fino a 7 giocatori) + PC come schermo
+### Telefoni come joypad + schermo diviso sul PC (fino a 7 giocatori)
 
-Il gioco si vede sul **PC** (o su una TV collegata al PC); ogni **telefono è un joypad**: niente grafica 3D sul telefono, solo comandi.
+Il gioco si vede sul **PC** (o su una TV collegata): lo schermo si **divide in un riquadro per giocatore**, ognuno con la **propria camera** che segue solo il suo robot
+(se un giocatore si sposta, le altre visuali non si muovono). Ogni **telefono è un joypad**: nessuna grafica 3D sul telefono, solo comandi.
 
 1. Sul PC lancia `start-game.bat` (o `npm run play`): si apre la **modalità schermo** con un **QR code** e il codice stanza.
-2. Sul telefono (stessa Wi-Fi) inquadra il QR: si apre il joypad. Scrivi il nome e premi **ENTRA**.
-3. La prima volta il browser avvisa *"connessione non privata"* (certificato locale generato dal gioco): **Avanzate → Prosegui**. È necessario perché i telefoni concedono accelerometro/giroscopio solo su HTTPS.
-4. Tieni il telefono **in orizzontale**. Premi **PRONTO!** (si calibra la posizione di riposo; **⟲ Centra** la ricalibra).
+2. Sul telefono (stessa Wi-Fi) inquadra il QR (si apre in HTTP semplice, **nessun avviso del browser**), scrivi il nome, **ENTRA**, **PRONTO!**. Telefono in orizzontale.
+3. Dal PC scegli mappa e modalità e premi **Avvia partita** (oppure parte da solo quando tutti sono pronti).
 
 | Comando | Cosa fa |
 |---|---|
-| **Inclina** il telefono | muove il robot (analogico: più inclini, più corri) |
+| **Joystick** (tocca e trascina a sinistra, compare dove metti il pollice) | muove il robot, analogico, nessuno smussamento aggiunto |
 | **SALTA** | salta; premuto di nuovo in aria = propulsore |
 | **TUFFO** | scatto in avanti che spinge gli altri |
 | 🎁 | usa l'oggetto raccolto |
 
-Se i sensori non sono disponibili (o rifiuti il permesso) il joypad passa da solo al **joystick** a schermo; il pulsante in basso cambia modo.
-Il telefono vibra quando raccogli un oggetto, vieni colpito o tagli il traguardo. Lo schermo (PC) può scegliere mappa e modalità e premere **Avvia partita**;
-i telefoni non occupano altro che il proprio slot: **il limite di 7 vale per i giocatori**, gli schermi non contano.
+Il telefono vibra quando raccogli un oggetto, vieni colpito o tagli il traguardo. Griglia dei riquadri: 1→1×1, 2→2×1, 3-4→2×2, 5-6→3×2, 7→4×2 con la **classifica nell'ottavo riquadro**.
+Il limite di 7 vale per i giocatori: lo schermo del PC non occupa uno slot.
 
-Senza HTTPS (o con `HTTPS_PORT=0`) tutto funziona comunque, ma solo col joystick.
+*Opzionale (beta)*: il pulsante "📱 Inclinazione" attiva il controllo con accelerometro; richiede HTTPS (`https://IP:porta+1/pad.html`, il browser mostra un avviso per il certificato locale).
+Con `HTTPS_PORT=0` l'HTTPS viene disattivato.
 
 ### App desktop (.exe, offline)
 

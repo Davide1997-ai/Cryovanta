@@ -12,6 +12,6 @@ startServer(port, { staticDir, httpsPort }).then((s) => {
   console.log(`[cryovanta] hub listening on http://localhost:${s.port}${s.httpsPort ? `  and https://localhost:${s.httpsPort}` : ''}  (healthz: /healthz)`);
   if (!staticDir) { console.log('[cryovanta] client not built: run "npm run build" to also serve the game over HTTP (needed for phones)'); return; }
   console.log(`\n  Schermo (PC):    http://localhost:${s.port}/?screen`);
-  for (const ip of lanAddresses()) console.log(`  Joypad telefono: ${s.httpsPort ? `https://${ip}:${s.httpsPort}/pad.html` : `http://${ip}:${s.port}/pad.html`}   (stessa Wi-Fi)`);
+  for (const ip of lanAddresses()) console.log(`  Joypad telefono: http://${ip}:${s.port}/pad.html   (stessa Wi-Fi)`);
   console.log('');
 });

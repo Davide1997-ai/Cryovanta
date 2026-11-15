@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { blinkPhase, groundBelow, hazardPose, platformCenter, windActive, type Course, type CourseHazard, type Platform, type Theme } from '@cryovanta/shared';
+import type { Rect } from './layout';
 import { cloudTexture, scaleBoxUV, surfaceTexture, waterNormal, windTexture, type TexKind } from './textures';
 
 export const NEON = [0x00e5ff, 0xff3df2, 0x7cff3a, 0xffb020, 0x8a6bff, 0xff4d4d];
@@ -67,7 +68,7 @@ export class Stage {
   setTheme(theme: Theme) {
     if (this.theme === theme) return;
     this.theme = theme;
-    this.envGroup.clear(); this.sun = null; this.water = null; this.snow = null;
+    this.envGroup.clear(); this.sun = null; this.water = null; this.snow = null; this.fogBase = 0;
     if (theme === 'neon') this.envNeon(); else this.envDay(theme);
   }
 
@@ -323,9 +324,9 @@ export class Stage {
 
   /** Everything that moves is a pure function of the tick, so all clients render identical hazards. */
   syncDynamic(tick: number, dt: number, focus: { x: number; y: number; z: number }) {
+    this.focusView(this.camera);                    // single-view path (split-screen calls focusView per viewport instead)
     if (!this.course || this.course.theme === 'neon') return;
     const t = tick / 60;
-    this.updateCull(this.camera.position.z);
     for (const b of this.blinkMeshes) {
       const ph = blinkPhase(b.p, tick), duty = b.p.duty ?? 0.6, solid = ph < duty, warn = solid && ph > duty - 0.2;
       b.mesh.visible = solid; b.ghost.visible = !solid;
@@ -348,13 +349,47 @@ export class Stage {
       (zo.mesh.material as THREE.MeshBasicMaterial).opacity = on ? 0.32 : 0.04; zo.tex.offset.x = (-dir * t * (on ? 1.6 : 0.2)) % 1;
     }
     if (this.waterTex) { this.waterTex.offset.set((t * 0.004) % 1, (t * 0.0025) % 1); }
-    if (this.water) { this.water.position.x = focus.x; this.water.position.z = focus.z; }
-    if (this.sun) { // keep the shadow frustum centred on the action
+    if (this.sun && !this.split) { // keep the shadow frustum centred on the action
       const off = this.sun.position.clone().sub(this.sun.target.position); this.sun.target.position.set(focus.x, focus.y, focus.z); this.sun.position.copy(this.sun.target.position).add(off);
       this.sun.target.updateMatrixWorld();
     }
-    if (this.snow) { const pos = this.snow.geometry.attributes.position as THREE.BufferAttribute; this.snow.position.set(focus.x, focus.y, focus.z);
+    if (this.snow) { const pos = this.snow.geometry.attributes.position as THREE.BufferAttribute;
       for (let i = 0; i < pos.count; i++) { let y = pos.getY(i) - dt * (2 + (i % 5) * 0.4); if (y < -4) y += 34; pos.setY(i, y); pos.setX(i, pos.getX(i) + Math.sin(t + i) * dt * 0.4); } pos.needsUpdate = true; }
+  }
+
+  /** Per-camera state: everything whose visibility/position depends on WHERE the camera is (called once per viewport). */
+  focusView(cam: THREE.Camera) {
+    const p = cam.position;
+    if (this.water) { this.water.position.x = p.x; this.water.position.z = p.z; }
+    if (this.snow) this.snow.position.set(p.x, p.y, p.z);
+    if (this.course && this.course.theme !== 'neon') this.updateCull(p.z);
+    this.applyBoxes(p.z);
+  }
+  private hiddenBoxes: ReadonlySet<number> = new Set();
+  private applyBoxes(camZ: number) {
+    this.boxMeshes.forEach((m, id) => { if (m) m.visible = Math.abs(m.position.z - camZ) < 90 && !this.hiddenBoxes.has(id); });
+  }
+
+  /** Split-screen: one render per player camera, each clipped to its own rectangle (CSS px, top-left origin). */
+  split = false; private fogBase = 0;
+  setSplit(on: boolean, views = 1) {
+    this.split = on;
+    this.cullRange = on ? (views > 4 ? 150 : views > 1 ? 230 : 320) : 320;
+    const fog = this.scene.fog as THREE.FogExp2 | null; if (fog) { if (this.fogBase === 0) this.fogBase = fog.density; fog.density = this.fogBase * (on && views > 4 && this.theme !== 'neon' ? 1.9 : 1); }
+    if (this.sun) this.sun.castShadow = !this.lite && (!on || views <= 1); // one shadow frustum cannot cover several distant players
+    const base = Math.min(devicePixelRatio, on ? (views > 2 ? 1.25 : 1.5) : this.lite ? 1.5 : 2);
+    if (base !== this.baseDpr) { this.baseDpr = base; this.renderer.setPixelRatio(base * this.dprScale); this.renderer.setSize(innerWidth, innerHeight, false); }
+  }
+  renderViews(views: { cam: THREE.PerspectiveCamera; rect: Rect; before?: () => void }[]) {
+    const r = this.renderer, H = innerHeight;
+    r.setScissorTest(true);
+    for (const v of views) {
+      const y = H - v.rect.y - v.rect.h;
+      r.setViewport(v.rect.x, y, v.rect.w, v.rect.h); r.setScissor(v.rect.x, y, v.rect.w, v.rect.h);
+      const aspect = v.rect.w / v.rect.h; if (Math.abs(v.cam.aspect - aspect) > 1e-3) { v.cam.aspect = aspect; v.cam.updateProjectionMatrix(); }
+      v.before?.(); r.render(this.scene, v.cam);
+    }
+    r.setScissorTest(false); r.setViewport(0, 0, innerWidth, innerHeight);
   }
 
   /** Cheap contact shadow under a robot (works on phones where real shadows are off). */
@@ -369,23 +404,20 @@ export class Stage {
   private tmpColor = new THREE.Color();
   animate(dt: number, hiddenBoxes: ReadonlySet<number> | number[]) {
     this.time += dt;
-    const hidden = hiddenBoxes instanceof Set ? hiddenBoxes : new Set(hiddenBoxes);
-    const cam = this.camera.position;
+    this.hiddenBoxes = hiddenBoxes instanceof Set ? hiddenBoxes : new Set(hiddenBoxes);
     this.boxMeshes.forEach((m, id) => {
       if (!m) return;
-      const near = Math.abs(m.position.z - cam.z) < 90;
-      m.visible = near && !hidden.has(id);
-      if (!m.visible) return;
       m.rotation.y += dt * 1.6; m.rotation.x = Math.sin(this.time * 1.4 + id) * 0.3;
       this.tmpColor.setHSL((this.time * 0.25 + id * 0.13) % 1, 1, 0.55);
       ((m.children[0] as THREE.Mesh).material as THREE.MeshStandardMaterial).emissive.copy(this.tmpColor);
     });
+    this.applyBoxes(this.camera.position.z);
   }
 
   /** Dynamic resolution: trade sharpness for frame-rate so controls stay fluid on slow phones. */
   private baseDpr = 1; private dprScale = 1; private slowT = 0; private fastT = 0;
   adaptQuality(fps: number, dtSec: number) {
-    if (!this.lite) return;
+    if (!this.lite && !this.split) return;
     if (fps < 42) { this.slowT += dtSec; this.fastT = 0; } else if (fps > 56) { this.fastT += dtSec; this.slowT = 0; } else { this.slowT = this.fastT = 0; }
     let changed = false;
     if (this.slowT > 1.5 && this.dprScale > 0.45) { this.dprScale = Math.max(0.45, this.dprScale * 0.8); this.slowT = 0; changed = true; }

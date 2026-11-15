@@ -73,14 +73,13 @@ const info = await new Promise((res) => get({ host: '127.0.0.1', port, path: '/i
 const screenUrl = `http://localhost:${port}/?screen`;
 const ips = info?.ips ?? [];
 const httpsPort = info?.httpsPort ?? null;
-const padFor = (ip) => (httpsPort ? `https://${ip}:${httpsPort}/pad.html` : `http://${ip}:${port}/pad.html`);
+const padFor = (ip) => `http://${ip}:${port}/pad.html`; // plain HTTP: no browser warning (HTTPS is only for the optional tilt control)
 const phone = ips[0] ? padFor(ips[0]) : null;
 
 console.log('\n' + c.g('✔ Gioco pronto!'));
 console.log(`  ${c.b('Schermo (PC):')}     ${screenUrl}   ← si apre da solo`);
 for (const ip of ips) console.log(`  ${c.b('Joypad telefono:')}  ${padFor(ip)}${ip === ips[0] ? '   ← inquadra il QR / apri questo' : ''}`);
-if (httpsPort) console.log(c.y('  Sul telefono il browser avvisa "connessione non privata" (certificato locale): scegli Avanzate → Prosegui. Serve per usare l\'inclinazione.'));
-else console.log(c.y('  HTTPS non disponibile: i telefoni useranno il joystick a schermo invece dell\'inclinazione.'));
+console.log('  Ogni telefono è un joypad (joystick + pulsanti); lo schermo del PC si divide in un riquadro per giocatore.');
 console.log(c.y('  Se Windows chiede il firewall, consenti Node sulle reti private.'));
 console.log('  Premi Ctrl+C per chiudere.\n');
 

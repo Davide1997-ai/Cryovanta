@@ -26,7 +26,7 @@
 | Aspetto | Scelta |
 |---|---|
 | Tick | 60 Hz fisso (`TICK_RATE`), catch-up limitato a 5 tick (niente spirale della morte) |
-| Snapshot | 20 Hz (`SNAPSHOT_EVERY=3`), serializzati **una volta** per stanza, droppabili se il socket è in backpressure (>256 KB) |
+| Snapshot | 30 Hz (`SNAPSHOT_EVERY=2`: lo schermo non predice, quindi più snapshot = meno latenza visiva), serializzati **una volta** per stanza, droppabili se il socket è in backpressure (>256 KB) |
 | Input | 1 frame/tick consumato dalla coda; pacchetti a 30/s con gli ultimi 3 frame (ridondanza anti-perdita); `seq` monotono → replay/rewind ignorati; coda max 12 → flood scartato |
 | Starvation | coda vuota → ripete l'ultimo input per max 6 tick, poi neutro |
 | Predizione | solo il robot locale. `Predictor.step` applica subito l'input; `reconcile` riparte dallo stato autoritativo, scarta gli input con `seq ≤ ack` e ri-simula il resto |
@@ -125,12 +125,18 @@ Difficoltà e lunghezza crescono col round. Partenza con countdown di 3 s; 5 s d
 * **Ruoli**: `player` (joypad o PC con tastiera) e **`display`** (schermo). Un display fa `{k:'screen'}`: crea (o si collega a) una stanza pubblica,
   riceve `round`/snapshot ma **non occupa uno slot** (`Room.displays`, max 3), non può inviare input né entrare come giocatore, può scegliere mappa/modalità
   (`config`) e forzare l'avvio (`start`, ≥2 giocatori). Una stanza vive finché ha giocatori **o** uno schermo. Il cap di 7 resta sui giocatori.
-* **Joypad** (`pad.html` + `pad.ts`, ~9 KB, nessun three.js): legge `deviceorientation`, invia `InputFrame` a 60 Hz con le stesse regole del client completo
+* **Schermo diviso** (`main.ts` in modalità `?screen`, `layout.ts`): una camera per giocatore (`PlayerCam`, spawn dietro il robot, mai condivisa),
+  `Stage.renderViews` disegna la scena una volta per riquadro con `viewport`+`scissor`; per-camera: culling per distanza, posizione di acqua/neve, LOD dei robot (`focusView`).
+  Griglia 1×1 / 2×1 / 2×2 / 3×2 / 4×2 (la cella avanzata ospita la classifica). Con molti riquadri: ombre reali spente (un solo frustum non copre giocatori lontani),
+  portata di visibilità ridotta, nebbia più fitta e risoluzione dinamica (`adaptQuality`). Il bloom (post-processing) è disattivato nel multi-riquadro.
+  Una camera non insegue un robot che cade nel vuoto (mantiene l'ultima altezza a terra); i riquadri degli eliminati osservano il leader.
+  Buffer di interpolazione dello schermo: 2 snapshot + 25 ms (≈91 ms), allargato dalla stima del jitter.
+* **Joypad** (`pad.html` + `pad.ts`, ~9 KB, nessun three.js): joystick flottante + 3 pulsanti (tap latched), invia `InputFrame` a 60 Hz con le stesse regole del client completo
   (latch dei tap, ridondanza, flush per frame). Nessuna predizione: il robot si vede sullo schermo.
 * **Inclinazione** (`tilt.ts`, pura e testata): il vettore "su" nel sistema del dispositivo `u = (-cosβ·sinγ, sinβ, cosβ·cosγ)` è indipendente dalla bussola e dalla piattaforma;
   si ruota nel sistema dello schermo con `screen.orientation.angle` (verticale/orizzontale, entrambi i versi) e si ricava roll/pitch. Poi: sottrazione della posa di riposo
   calibrata, zona morta 2.5°, curva ^1.35 (controllo fine al centro), saturazione a 26°, smussamento esponenziale indipendente dal framerate.
-* **HTTPS**: i browser mobili espongono i sensori solo su origini sicure. Il server apre anche HTTPS (`porta+1`) con un certificato **autofirmato** (`selfsigned`, SAN = localhost + IP LAN,
+* **HTTPS (solo per l'inclinazione opzionale)**: i browser mobili espongono i sensori solo su origini sicure; il joypad normale usa HTTP e non mostra avvisi. Il server apre anche HTTPS (`porta+1`) con un certificato **autofirmato** (`selfsigned`, SAN = localhost + IP LAN,
   in `.cert/`, ignorato da git). WebSocket condiviso fra `ws://` e `wss://`; `/info` espone IP e porte per costruire il QR.
   `requestPermission()` (iOS) va chiamato dentro il tap; si ascoltano comunque gli eventi e conta solo se arrivano dati davvero.
 * **Limite noto**: ho verificato la catena con eventi `deviceorientation` **simulati** (Chromium headless non fornisce valori reali): sensore hardware, segni su iOS/Android

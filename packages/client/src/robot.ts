@@ -54,6 +54,9 @@ export class Robot {
     this.root.add(this.body, this.flame, this.shield, this.trail, this.stars);
   }
 
+  /** LOD switch (small parts hidden on far robots). Split-screen sets it per viewport. */
+  setDetail(on: boolean) { for (const o of this.small) o.visible = on; }
+
   update(dt: number, s: SnapPlayer, pos: { x: number; y: number; z: number }, camDist = 0) {
     this.t += dt;
     const detail = camDist < 24; for (const o of this.small) o.visible = detail; // LOD: far robots = 5 draw calls instead of 14
