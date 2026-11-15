@@ -18,6 +18,8 @@ export interface RoomInfo {
   capacity: number; members: LobbyMember[]; countdown: number; // seconds, 0 if none
   /** host-selectable options (map id or 'random', mode id) */
   options: { map: string; mode: string };
+  /** number of attached big screens (not counted in `members`/capacity) */
+  displays: number;
 }
 export type ErrorCode = 'ROOM_FULL' | 'ROOM_NOT_FOUND' | 'ROOM_IN_PROGRESS' | 'BAD_REQUEST' | 'NOT_IN_ROOM' | 'RATE_LIMITED' | 'BAD_VERSION' | 'UNKNOWN_GAME' | 'NOT_HOST';
 
@@ -29,6 +31,9 @@ export type ClientMsg =
   | { k: 'join'; code: string }
   | { k: 'ready'; ready: boolean }
   | { k: 'config'; map: string; mode: string }
+  /** Big-screen client: watches a room (creates one if no code). NOT a player: does not use one of the 7 slots. */
+  | { k: 'screen'; game: string; code?: string }
+  | { k: 'start' }
   | { k: 'leave' }
   | { k: 'input'; frames: InputFrame[] }
   | { k: 'ping'; t: number };
@@ -97,6 +102,8 @@ export function parseClientMsg(text: string): ClientMsg | null {
     case 'join': return typeof m.code === 'string' && /^[A-Z0-9]{4,6}$/.test(m.code.toUpperCase()) ? { k: 'join', code: m.code.toUpperCase() } : null;
     case 'ready': return { k: 'ready', ready: m.ready === true };
     case 'config': return typeof m.map === 'string' && typeof m.mode === 'string' && m.map.length <= 32 && m.mode.length <= 32 ? { k: 'config', map: m.map, mode: m.mode } : null;
+    case 'screen': return typeof m.game === 'string' && m.game.length <= 32 && (m.code === undefined || (typeof m.code === 'string' && /^[A-Z0-9]{4,6}$/.test(m.code.toUpperCase()))) ? { k: 'screen', game: m.game, code: typeof m.code === 'string' ? m.code.toUpperCase() : undefined } : null;
+    case 'start': return { k: 'start' };
     case 'leave': return { k: 'leave' };
     case 'input': { const frames = parseInputFrames(m.frames); return frames ? { k: 'input', frames } : null; }
     case 'ping': { const t = num(m.t); return t === null ? null : { k: 'ping', t }; }

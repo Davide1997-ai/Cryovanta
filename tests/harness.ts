@@ -84,8 +84,9 @@ export class Bot {
       case 'room': this.room = m.room; this.slot = m.you; break;
       case 'error': this.errors.push(m.code); break;
       case 'round':
-        this.roundsSeen++; this.predictor = new Predictor(buildMap(m.map, m.seed, m.difficulty), this.slot);
-        this.autopilot = m.participants.includes(this.slot); break;
+        this.roundsSeen++;
+        if (this.slot >= 0) { this.predictor = new Predictor(buildMap(m.map, m.seed, m.difficulty), this.slot); this.autopilot = m.participants.includes(this.slot); }
+        break;
       case 'snap':
         if (this.predictor) { this.predictor.reconcile(m); if (this.predictor.running) { this.maxError = Math.max(this.maxError, this.predictor.lastError); this.errors_.push(this.predictor.lastError); } }
         break;
@@ -94,4 +95,5 @@ export class Bot {
     }
   }
   get inRoom() { return !!this.client.room; }
+  get isScreen() { return !!this.client.display; }
 }

@@ -27,6 +27,7 @@ export class Hub {
 
   onClose(client: Client) {
     this.clients.delete(client);
+    if (client.display) { const r = client.display; r.detachDisplay(client); this.gc(r); }
     client.room?.disconnect(client);
   }
 
@@ -41,12 +42,15 @@ export class Hub {
   private dispatch(c: Client, m: ClientMsg) {
     if (m.k === 'hello') return this.hello(c, m);
     if (!c.greeted) return this.err(c, 'BAD_REQUEST', 'Say hello first');
+    if (c.display && (m.k === 'input' || m.k === 'ready' || m.k === 'quickplay' || m.k === 'create' || m.k === 'join')) return this.err(c, 'BAD_REQUEST', 'A screen cannot play');
     switch (m.k) {
       case 'ping': return c.send({ k: 'pong', t: m.t, serverTime: this.opts.clock() });
       case 'input': return c.room?.handleInput(c, m.frames);
       case 'ready': return c.room ? c.room.setReady(c, m.ready) : this.err(c, 'NOT_IN_ROOM', 'Not in a room');
       case 'leave': if (c.room) { const r = c.room; this.byToken.delete(c.token); r.leave(c); this.gc(r); c.send({ k: 'left' }); } return;
-      case 'config': { if (!c.room) return this.err(c, 'NOT_IN_ROOM', 'Not in a room'); const e = c.room.setConfig(c, m.map, m.mode); if (e) this.err(c, e, e === 'NOT_HOST' ? 'Solo l\'host può cambiare le regole' : 'Opzione non valida'); return; }
+      case 'screen': return this.screen(c, m.game, m.code);
+      case 'start': { const r = c.display; if (!r) return this.err(c, 'NOT_HOST', 'Only a screen can force the start'); if (!r.forceStart()) this.err(c, 'BAD_REQUEST', 'Servono almeno 2 giocatori'); return; }
+      case 'config': { const rm = c.room ?? c.display; if (!rm) return this.err(c, 'NOT_IN_ROOM', 'Not in a room'); const e = rm.setConfig(c, m.map, m.mode); if (e) this.err(c, e, e === 'NOT_HOST' ? 'Solo l\'host può cambiare le regole' : 'Opzione non valida'); return; }
       case 'quickplay': return this.quickplay(c, m.game);
       case 'create': return this.create(c, m.game, m.isPrivate);
       case 'join': return this.joinByCode(c, m.code);
@@ -75,7 +79,7 @@ export class Hub {
     let best: Room | null = null;
     for (const r of this.rooms.values()) {
       if (r.game.id !== gameId || r.isPrivate || !r.joinable) continue;
-      if (!best || r.size > best.size) best = r;
+      if (!best || (r.displayCount > 0) > (best.displayCount > 0) || ((r.displayCount > 0) === (best.displayCount > 0) && r.size > best.size)) best = r;
     }
     this.enter(c, best ?? this.newRoom(game, false));
   }
@@ -89,6 +93,15 @@ export class Hub {
     const r = this.rooms.get(code);
     if (!r) return this.err(c, 'ROOM_NOT_FOUND', 'No such room');
     this.enter(c, r);
+  }
+  private screen(c: Client, gameId: string, code?: string) {
+    const game = this.games.get(gameId); if (!game) return this.err(c, 'UNKNOWN_GAME', gameId);
+    if (c.room || c.display) return this.err(c, 'BAD_REQUEST', 'Already attached');
+    let room: Room | undefined;
+    if (code) { room = this.rooms.get(code); if (!room) return this.err(c, 'ROOM_NOT_FOUND', 'No such room'); }
+    else room = this.newRoom(game, false); // public: phones that "quick play" land in the screen's room
+    const res = room.attachDisplay(c);
+    if (!res.ok) this.err(c, res.code, res.msg);
   }
   private enter(c: Client, room: Room) {
     const res = room.tryJoin(c);
@@ -105,7 +118,7 @@ export class Hub {
     return room;
   }
   private gc(room: Room) {
-    if (room.size === 0) { this.rooms.delete(room.code); for (const [t, v] of this.byToken) if (v.room === room) this.byToken.delete(t); }
+    if (room.size === 0 && room.displayCount === 0) { this.rooms.delete(room.code); for (const [t, v] of this.byToken) if (v.room === room) this.byToken.delete(t); }
   }
 
   /** Called by the global loop. */

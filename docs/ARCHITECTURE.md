@@ -120,6 +120,22 @@ Difficoltà e lunghezza crescono col round. Partenza con countdown di 3 s; 5 s d
 * Operatività: `maxRooms`/`maxClients` configurabili, `/healthz`, un solo processo = un solo loop (scala orizzontalmente per
   stanza: lo stato di una stanza non è condiviso, basta un router davanti).
 
+## 6b. Telefono come joypad, PC come schermo
+
+* **Ruoli**: `player` (joypad o PC con tastiera) e **`display`** (schermo). Un display fa `{k:'screen'}`: crea (o si collega a) una stanza pubblica,
+  riceve `round`/snapshot ma **non occupa uno slot** (`Room.displays`, max 3), non può inviare input né entrare come giocatore, può scegliere mappa/modalità
+  (`config`) e forzare l'avvio (`start`, ≥2 giocatori). Una stanza vive finché ha giocatori **o** uno schermo. Il cap di 7 resta sui giocatori.
+* **Joypad** (`pad.html` + `pad.ts`, ~9 KB, nessun three.js): legge `deviceorientation`, invia `InputFrame` a 60 Hz con le stesse regole del client completo
+  (latch dei tap, ridondanza, flush per frame). Nessuna predizione: il robot si vede sullo schermo.
+* **Inclinazione** (`tilt.ts`, pura e testata): il vettore "su" nel sistema del dispositivo `u = (-cosβ·sinγ, sinβ, cosβ·cosγ)` è indipendente dalla bussola e dalla piattaforma;
+  si ruota nel sistema dello schermo con `screen.orientation.angle` (verticale/orizzontale, entrambi i versi) e si ricava roll/pitch. Poi: sottrazione della posa di riposo
+  calibrata, zona morta 2.5°, curva ^1.35 (controllo fine al centro), saturazione a 26°, smussamento esponenziale indipendente dal framerate.
+* **HTTPS**: i browser mobili espongono i sensori solo su origini sicure. Il server apre anche HTTPS (`porta+1`) con un certificato **autofirmato** (`selfsigned`, SAN = localhost + IP LAN,
+  in `.cert/`, ignorato da git). WebSocket condiviso fra `ws://` e `wss://`; `/info` espone IP e porte per costruire il QR.
+  `requestPermission()` (iOS) va chiamato dentro il tap; si ascoltano comunque gli eventi e conta solo se arrivano dati davvero.
+* **Limite noto**: ho verificato la catena con eventi `deviceorientation` **simulati** (Chromium headless non fornisce valori reali): sensore hardware, segni su iOS/Android
+  e comodità reale vanno provati su telefoni veri.
+
 ## 7a. Grafica "quasi fotorealistica": cosa c'è e cosa no
 
 Titan/Frost usano: cielo fisico (`Sky`, stesso cielo come luce ambientale per riflessi coerenti), **texture procedurali tileable** (cemento, legno,

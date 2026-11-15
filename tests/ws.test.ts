@@ -42,3 +42,17 @@ describe('real websocket server', () => {
     c.ws.close();
   });
 });
+
+describe('HTTPS/WSS (needed for phone motion sensors)', () => {
+  it('serves /info and accepts secure websockets with the self-signed certificate', async () => {
+    const s = await startServer(0, { httpsPort: 0 });
+    try {
+      expect(s.httpsPort).toBeGreaterThan(0);
+      const info = await (await fetch(`http://127.0.0.1:${s.port}/info`)).json();
+      expect(info.httpsPort).toBe(s.httpsPort); expect(Array.isArray(info.ips)).toBe(true);
+      const ws = new WebSocket(`wss://127.0.0.1:${s.httpsPort}`, { rejectUnauthorized: false });
+      const got = await new Promise<string>((res, rej) => { ws.on('open', () => ws.send(JSON.stringify({ k: 'hello', v: PROTOCOL_VERSION, name: 'secure' }))); ws.on('message', (d) => res(JSON.parse(d.toString()).k)); ws.on('error', rej); });
+      expect(got).toBe('welcome'); ws.close();
+    } finally { await s.close(); }
+  });
+});

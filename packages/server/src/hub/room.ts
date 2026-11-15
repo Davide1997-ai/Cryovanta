@@ -1,5 +1,5 @@
 import {
-  MAX_PLAYERS_PER_ROOM, type ErrorCode, type InputFrame, type LobbyMember, type RoomInfo, type RoomPhase, type ServerMsg,
+  MAX_PLAYERS_PER_ROOM, type RoundStart, type ErrorCode, type InputFrame, type LobbyMember, type RoomInfo, type RoomPhase, type ServerMsg,
 } from '@cryovanta/shared';
 import type { Client } from './client';
 import type { GameHost, GameModule, GameSession } from './game';
@@ -26,12 +26,34 @@ export class Room {
   private slots: (Member | null)[] = new Array(MAX_PLAYERS_PER_ROOM).fill(null);
   private session: GameSession | null = null;
   options: RoomOptions;
+  /** Big screens watching this room. They receive everything but are not players: the 7-slot cap is untouched. */
+  readonly displays = new Set<Client>();
+  private lastRound: RoundStart | null = null;
   private countdownEnds = 0;
   private resultsEnds = 0;
   private lastInfoBroadcast = 0;
   onEmpty?: (room: Room) => void;
 
   constructor(readonly code: string, readonly game: GameModule, readonly isPrivate: boolean, private clock: () => number = Date.now) { assertValidModule(game); this.options = { map: game.options.map[0], mode: game.options.mode[0] }; }
+
+  // ------------------------------------------------------------ big screens
+  static readonly MAX_DISPLAYS = 3;
+  get displayCount() { return this.displays.size; }
+  attachDisplay(client: Client): JoinResult | { ok: true; slot: -1 } {
+    if (this.displays.size >= Room.MAX_DISPLAYS) return { ok: false, code: 'ROOM_FULL', msg: 'Too many screens' };
+    this.displays.add(client); client.display = this;
+    client.send({ k: 'room', room: this.info(), you: -1 });
+    if (this.phase === 'playing' && this.lastRound) client.send(this.lastRound); // late-joining screen needs the course
+    return { ok: true, slot: -1 };
+  }
+  detachDisplay(client: Client) { this.displays.delete(client); if (client.display === this) client.display = null; if (this.size === 0 && this.displays.size === 0) this.onEmpty?.(this); }
+  /** Screen pressed "start": everyone present is considered ready (needs the game's minimum number of players). */
+  forceStart(): boolean {
+    if (this.phase !== 'lobby') return false;
+    const ms = this.connected(); if (ms.length < this.game.minPlayers) return false;
+    for (const m of ms) m.ready = true;
+    this.evaluateStart(); this.broadcastRoom(); return true;
+  }
 
   // ------------------------------------------------------------ membership
   get size() { return this.slots.reduce((n, m) => n + (m ? 1 : 0), 0); }
@@ -89,7 +111,8 @@ export class Room {
   get hostSlot() { return this.slots.findIndex((m) => m?.client); }
   /** Host picks map and mode (validated against the game's allowed lists). */
   setConfig(client: Client, map: string, mode: string): ErrorCode | null {
-    if (client.slot !== this.hostSlot) return 'NOT_HOST';
+    const isScreen = client.display === this;
+    if (!isScreen && client.slot !== this.hostSlot) return 'NOT_HOST';
     if (this.phase !== 'lobby' && this.phase !== 'countdown') return 'ROOM_IN_PROGRESS';
     if (!this.game.options.map.includes(map) || !this.game.options.mode.includes(mode)) return 'BAD_REQUEST';
     this.options = { map, mode };
@@ -158,7 +181,7 @@ export class Room {
     const members: LobbyMember[] = [];
     for (const m of this.slots) if (m) members.push({ slot: m.slot, name: m.name, ready: m.ready, host: m.slot === host, connected: !!m.client });
     return {
-      code: this.code, game: this.game.id, phase: this.phase, isPrivate: this.isPrivate, capacity: this.capacity, members, options: this.options,
+      code: this.code, game: this.game.id, phase: this.phase, isPrivate: this.isPrivate, capacity: this.capacity, members, options: this.options, displays: this.displays.size,
       countdown: this.phase === 'countdown' ? Math.max(0, Math.ceil((this.countdownEnds - this.clock()) / 1000)) : 0,
     };
   }
@@ -166,11 +189,17 @@ export class Room {
     this.lastInfoBroadcast = now;
     const info = this.info();
     for (const m of this.slots) m?.client?.send({ k: 'room', room: info, you: m.slot });
+    for (const d of this.displays) d.send({ k: 'room', room: info, you: -1 });
   }
   broadcast(msg: ServerMsg) {
+    if (msg.k === 'round') this.lastRound = msg;
     const json = JSON.stringify(msg); // serialise once for all recipients
     const droppable = msg.k === 'snap';
     for (const m of this.slots) m?.client?.sendRaw(json, droppable);
+    for (const d of this.displays) d.sendRaw(json, droppable);
   }
-  sendCurrent(client: Client) { client.send({ k: 'room', room: this.info(), you: client.slot }); }
+  sendCurrent(client: Client) {
+    client.send({ k: 'room', room: this.info(), you: client.slot });
+    if (this.phase === 'playing' && this.lastRound) client.send(this.lastRound); // a returning player (or reloaded page) needs the course
+  }
 }

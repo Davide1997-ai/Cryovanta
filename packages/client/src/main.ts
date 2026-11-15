@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import qrcode from 'qrcode-generator';
 import {
   DT, INTERP_DELAY_MS, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
   type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
@@ -12,6 +13,9 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const GAME = 'neon-circuit';
 const ICON: Record<string, string> = { boost: '⚡', seeker: '🎯', hazard: '🧱', shield: '🛡️' };
 
+/** Big-screen mode (?screen): shows the game + QR, phones are the joypads. */
+const SCREEN = new URLSearchParams(location.search).has('screen');
+if (SCREEN) document.body.classList.add('screen');
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 if (isTouch) document.body.classList.add('touch');
 const canvas = $<HTMLCanvasElement>('c');
@@ -28,10 +32,11 @@ let participants: number[] = [];
 /** Adaptive jitter buffer: widens when Wi-Fi delivers snapshots in bursts, shrinks again when it calms down. */
 let interpDelay = INTERP_DELAY_MS, snapGap = 50, lastSnapT = 0;
 let toastTimer = 0;
+let inGameView = false;
 let mapName = '', modeName = '';
 
 // ------------------------------------------------------------------ UI
-const err = (t: string) => { $('err').textContent = t; };
+const err = (t: string) => { ($(SCREEN ? 'sErr' : 'err')).textContent = t; };
 const toast = (t: string, ms = 1400) => { $('htoast').textContent = t; toastTimer = performance.now() + ms; };
 function renderRoom() {
   const lobbyEl = $('lobby'), playing = room?.phase === 'playing';
@@ -75,31 +80,33 @@ async function reconnect() {
   const t0 = performance.now();
   while (performance.now() - t0 < 25000) {
     toast('📶 Riconnessione…', 1200);
-    try { await net.connect(lastUrl, lastName); connected = true; reconnecting = false; toast('Riconnesso!'); return; } catch { await new Promise((r) => setTimeout(r, 700)); }
+    try { await net.connect(lastUrl, lastName); connected = true; reconnecting = false; toast('Riconnesso!'); if (SCREEN) net.send({ k: 'screen', game: GAME, code: room?.code }); return; } catch { await new Promise((r) => setTimeout(r, 700)); }
   }
   reconnecting = false; room = null; predictor = null; renderRoom(); err('Connessione persa');
 }
+const wsUrl = () => new URLSearchParams(location.search).get('server') ?? (location.port === '5173' ? `ws://${location.hostname || 'localhost'}:8080` : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`); // dev: separate server; packaged/LAN: same origin
+async function ensureConnected(name: string): Promise<boolean> {
+  if (connected) return true;
+  const url = wsUrl();
+  try { await net.connect(url, name); connected = true; } catch { err('Server non raggiungibile'); return false; }
+  lastName = name; lastUrl = url; net.onMsg = onMsg; net.onClose = reconnect; return true;
+}
 async function start(then: () => void) {
   err('');
-  if (!connected) {
-    const name = $<HTMLInputElement>('name').value.trim() || 'Bolt-' + Math.floor(Math.random() * 99);
-    const url = new URLSearchParams(location.search).get('server') ?? (location.port === '5173' ? `ws://${location.hostname || 'localhost'}:8080` : `ws://${location.host}`); // dev: separate server; packaged/LAN: same origin
-    try { await net.connect(url, name); connected = true; } catch { return err('Server non raggiungibile'); }
-    lastName = name; lastUrl = url; net.onMsg = onMsg; net.onClose = reconnect;
-  }
+  if (!(await ensureConnected($<HTMLInputElement>('name').value.trim() || 'Bolt-' + Math.floor(Math.random() * 99)))) return;
   then();
 }
 
 // ------------------------------------------------------------------ network
 function onMsg(m: ServerMsg) {
   switch (m.k) {
-    case 'room': room = m.room; me = m.you; renderRoom(); break;
+    case 'room': room = m.room; me = m.you; if (SCREEN) renderScreen(); else renderRoom(); if (m.room.phase === 'lobby') inGameView = false; break;
     case 'left': room = null; predictor = null; renderRoom(); break;
     case 'error': err(`${m.code}: ${m.msg}`); break;
     case 'round': {
       const course = buildMap(m.map, m.seed, m.difficulty); mapName = MAPS[m.map]?.name ?? m.map; modeName = MODES[m.mode]?.name ?? m.mode;
       stage.buildCourse(course);
-      predictor = new Predictor(course, me);
+      predictor = SCREEN ? null : new Predictor(course, me); inGameView = true;
       snaps = []; participants = m.participants;
       $('results').style.display = 'none';
       toast(`${mapName.toUpperCase()} · ROUND ${m.round + 1}${MODES[m.mode]?.kind === 'elimination' ? ' — passano ' + m.qualify : ''}`, 3000);
@@ -115,18 +122,20 @@ function onMsg(m: ServerMsg) {
       for (const e of m.ev) {
         if (e.t === 'pickup' && e.slot === me) toast(`${ICON[e.item]} ${e.item.toUpperCase()}!`);
         if (e.t === 'impact' && e.victim === me) toast(e.outcome === 'blocked' ? '🛡️ PARATO!' : e.outcome === 'smashed' ? '💥 SFONDATO!' : e.kind === 'obstacle' ? '🔨 OSTACOLO!' : '💫 COLPITO!');
+        if (SCREEN && e.t === 'finish') { const nm = room?.members.find((x) => x.slot === e.slot)?.name ?? '?'; toast(`🏁 ${nm} è #${e.rank}`, 2200); }
         if (e.t === 'finish' && e.slot === me) toast(`🏁 TRAGUARDO #${e.rank}`, 2500);
         if (e.t === 'fall' && e.slot === me) toast('Caduto!');
       }
       break;
     }
     case 'roundEnd':
-      toast(m.qualified.includes(me) ? '✅ QUALIFICATO' : '❌ ELIMINATO', 3500); break;
+      if (SCREEN) { const nm = (s: number) => room?.members.find((x) => x.slot === s)?.name ?? '?'; toast(MODES[room?.options.mode ?? '']?.kind === 'elimination' && m.eliminated.length ? `❌ Eliminati: ${m.eliminated.map(nm).join(', ')}` : `🏁 Round finito: ${m.qualified.slice(0, 3).map(nm).join(' › ')}`, 4500); }
+      else toast(m.qualified.includes(me) ? '✅ QUALIFICATO' : '❌ ELIMINATO', 3500); break;
     case 'matchEnd': {
       const names = new Map(room?.members.map((x) => [x.slot, x.name]));
-      $('results').style.display = ''; $('lobby').style.display = '';
+      const resEl = SCREEN ? $('sResults') : $('results'); resEl.style.display = ''; if (!SCREEN) $('lobby').style.display = '';
       const gp = m.points.some((p) => p > 0);
-      $('results').innerHTML = `<h3>Classifica · ${esc(modeName)}</h3>` + m.standings.map((s, i) => `<div>${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}${gp ? ` — ${m.points[s]} pt` : ''}</div>`).join('');
+      resEl.innerHTML = `<h3>Classifica · ${esc(modeName)}</h3>` + m.standings.map((s, i) => `<div>${i + 1}. ${esc(names.get(s) ?? '?')}${s === m.winner ? ' 🏆' : ''}${gp ? ` — ${m.points[s]} pt` : ''}</div>`).join('');
       break;
     }
   }
@@ -134,7 +143,7 @@ function onMsg(m: ServerMsg) {
 
 // ------------------------------------------------------------------ main loop
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
-(window as any).__cv = { freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; } };
+(window as any).__cv = { freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
 const camPos = new THREE.Vector3(0, 6, -10), camLook = new THREE.Vector3(), tmpV = new THREE.Vector3();
 const seekerMeshes = new Map<number, THREE.Object3D>(), hazardMeshes = new Map<number, THREE.Object3D>();
@@ -191,7 +200,7 @@ function render(dt: number, now: number) {
     }
     stage.animate(dt, latest.bx);
     syncProjectiles(br);
-    hud(latest);
+    if (SCREEN) board(latest); else hud(latest);
     follow(dt, latest);
   }
   if (now > toastTimer) $('htoast').textContent = '';
@@ -237,7 +246,8 @@ function follow(dt: number, s: Snapshot) {
     tgt = lead ? { x: lead.x, y: lead.y, z: lead.z } : { x: 0, y: 0, z: 0 };
   }
   const yaw = input.camYaw, sx = Math.sin(yaw), cz = Math.cos(yaw);
-  const desired = new THREE.Vector3(tgt.x - sx * 9.5, tgt.y + 5.4, tgt.z - cz * 9.5);
+  const back = SCREEN ? 13 : 9.5, up = SCREEN ? 7.6 : 5.4;
+  const desired = new THREE.Vector3(tgt.x - sx * back, tgt.y + up, tgt.z - cz * back);
   camPos.lerp(desired, 1 - Math.exp(-7 * dt));
   camLook.lerp(new THREE.Vector3(tgt.x + sx * 5, tgt.y + 1.4, tgt.z + cz * 5), 1 - Math.exp(-10 * dt));
   stage.camera.position.copy(camPos); stage.camera.lookAt(camLook);
@@ -246,9 +256,45 @@ function follow(dt: number, s: Snapshot) {
 // idle backdrop for the lobby: slow orbit over a demo course until a round starts
 stage.buildCourse(buildMap('titan-gauntlet', 11, 0.5));
 function lobbySpin(t: number) {
-  if (predictor) return;
+  if (predictor || inGameView) return;
   stage.camera.position.set(Math.sin(t / 7000) * 22, 9, -20 + Math.cos(t / 7000) * 5);
   stage.camera.lookAt(0, 2, 30); const tk = Math.floor(t / 16.6); stage.syncPlatforms(tk); stage.syncDynamic(tk, 0.016, { x: 0, y: 2, z: 20 });
 }
 renderRoom();
 requestAnimationFrame(frame);
+
+// ------------------------------------------------------------------ big-screen mode
+let info: { ips: string[]; port: number; httpsPort: number | null } | null = null, qrFor = '';
+function joinUrl(code: string) {
+  const host = info?.ips[0] ?? location.hostname;
+  return info?.httpsPort ? `https://${host}:${info.httpsPort}/pad.html?room=${code}` : `http://${host}:${info?.port ?? location.port}/pad.html?room=${code}`;
+}
+function renderScreen() {
+  const playing = room?.phase === 'playing';
+  $('screenPanel').style.display = playing ? 'none' : 'block'; $('board').style.display = playing ? 'block' : 'none'; $('hud').style.display = playing ? 'block' : 'none';
+  if (!room) return;
+  const url = joinUrl(room.code);
+  if (qrFor !== url) { qrFor = url; const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); $('joinUrl').textContent = url.replace(/^https?:\/\//, '').replace('/pad.html', '/…'); }
+  $('scode').textContent = room.code;
+  $('smembers').innerHTML = room.members.length ? room.members.map((m) => `<li><span style="color:#${ROBOT_COLORS[m.slot].toString(16).padStart(6, '0')}">● ${esc(m.name)}${m.host ? ' 👑' : ''}</span><span class="${m.ready ? 'ready' : 'muted'}">${!m.connected ? 'offline' : m.ready ? 'PRONTO' : '…'}</span></li>`).join('') : '<li class="muted">Nessun giocatore: scansiona il QR con il telefono</li>';
+  $('scount').textContent = `${room.members.length}/7 giocatori · ${room.phase === 'countdown' ? 'via tra ' + room.countdown + '…' : 'in attesa'}`;
+  const sm = $<HTMLSelectElement>('sMap'), sd = $<HTMLSelectElement>('sMode');
+  if (!sm.options.length) { sm.innerHTML = ['random', ...MAP_IDS].map((id) => `<option value="${id}">${id === 'random' ? '🎲 Mappa casuale' : '🗺️ ' + MAPS[id].name}</option>`).join(''); sd.innerHTML = MODE_IDS.map((id) => `<option value="${id}">🏁 ${MODES[id].name}</option>`).join(''); }
+  sm.value = room.options.map; sd.value = room.options.mode;
+  $('sDesc').textContent = (room.options.map === 'random' ? 'Ogni round una mappa diversa. ' : MAPS[room.options.map]?.desc + ' ') + (MODES[room.options.mode]?.desc ?? '');
+  ($('sStart') as HTMLButtonElement).disabled = room.members.length < 2 || room.phase !== 'lobby';
+}
+function board(s: Snapshot) {
+  const name = (slot: number) => room?.members.find((m) => m.slot === slot)?.name ?? `P${slot + 1}`;
+  const rows = s.players.filter((p) => p.al === 1 || p.fr > 0).sort((a, b) => (a.fr && b.fr ? a.fr - b.fr : a.fr ? -1 : b.fr ? 1 : b.z - a.z));
+  $('board').innerHTML = rows.map((p, i) => `<div class="row-b"><b>${i + 1}</b><i style="background:#${ROBOT_COLORS[p.s].toString(16).padStart(6, '0')}"></i><span>${esc(name(p.s))}</span><em>${p.fr ? '🏁' : p.it ? ICON[p.it] : ''}${p.st > 0 ? '💫' : p.sh > 0 ? '🛡️' : p.bo > 0 ? '⚡' : ''}</em></div>`).join('');
+  $('hinfo').innerHTML = `${esc(mapName)} · ${esc(modeName)}<br/>Round ${s.round + 1}<br/>${s.mp === 'intermission' ? 'Prossimo round' : 'Tempo'} ${Math.max(0, s.left).toFixed(0)}s`;
+  $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';
+}
+if (SCREEN) {
+  $('sMap').onchange = $('sMode').onchange = () => net.send({ k: 'config', map: $<HTMLSelectElement>('sMap').value, mode: $<HTMLSelectElement>('sMode').value });
+  $('sStart').onclick = () => net.send({ k: 'start' });
+  addEventListener('keydown', (e) => { if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.(); });
+  fetch('/info').then((r) => r.json()).then((i) => { info = i; if (room) renderScreen(); }).catch(() => {});
+  (async () => { if (await ensureConnected('Schermo')) net.send({ k: 'screen', game: GAME }); })();
+}

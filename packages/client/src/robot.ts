@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { SnapPlayer } from '@cryovanta/shared';
 
-export const ROBOT_COLORS = [0x2f7bff, 0xff4f8b, 0x35d07f, 0xffc233, 0x9b6bff, 0xff7a3d, 0x3fe0d0];
+import { PLAYER_COLORS } from '@cryovanta/shared';
+export const ROBOT_COLORS: readonly number[] = PLAYER_COLORS;
 
 const LITE = matchMedia('(pointer: coarse)').matches;
 // clearcoat is expensive on mobile GPUs: phones get a standard glossy material

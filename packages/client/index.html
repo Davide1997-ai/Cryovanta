@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="theme-color" content="#070816" />
   <title>Cryovanta — Neon Circuit</title>
+  <script>if (matchMedia('(pointer: coarse)').matches && !/[?&](full|screen)(&|=|$)/.test(location.search)) location.replace('/pad.html' + location.search);</script>
   <style>
     :root { --neon:#00e5ff; --pink:#ff3df2; --bg:#070816; --panel:rgba(14,16,40,.78); }
     * { box-sizing: border-box; }
@@ -48,6 +49,17 @@
       .row { margin-top:6px; } input, button { padding:7px 12px; }
     }
     @media (max-height: 520px) { #lobby { max-height: 94vh; overflow:auto; } #hud .big { font-size:56px; } #hud .item { width:60px; height:60px; font-size:24px; } }
+    /* ---- big-screen (TV) mode ---- */
+    body.screen #lobby, body.screen #touch, body.screen #keys { display:none !important; }
+    #screenPanel { display:none; left:50%; top:50%; transform:translate(-50%,-50%); width:min(920px,94vw); }
+    #screenPanel .cols { display:grid; grid-template-columns: 300px 1fr; gap:22px; align-items:start; }
+    #qr { background:#fff; border-radius:14px; padding:6px; width:300px; } #qr svg { display:block; width:100%; height:auto; }
+    .big-code { font-size:34px; letter-spacing:.3em; font-weight:900; text-shadow:0 0 14px var(--neon); }
+    #sStart { width:100%; margin-top:12px; font-size:20px; padding:14px; }
+    #board { display:none; position:fixed; left:18px; top:70px; width:230px; font-size:17px; pointer-events:none; }
+    #board .row-b { display:flex; align-items:center; gap:8px; padding:5px 10px; margin-bottom:4px; border-radius:10px; background:rgba(8,10,30,.6); border:1px solid rgba(0,229,255,.25); }
+    #board i { width:14px; height:14px; border-radius:50%; box-shadow:0 0 8px currentColor; } #board span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } #board em { font-style:normal; }
+    body.screen #hrank, body.screen #hitem { display:none; }
     #net { position:fixed; right:10px; bottom:8px; font:11px ui-monospace, monospace; opacity:.55; }
     #keys { position:fixed; left:12px; bottom:8px; font-size:12px; opacity:.55; }
   </style>
@@ -56,6 +68,7 @@
   <canvas id="c"></canvas>
   <div id="lobby" class="panel">
     <h1>NEON CIRCUIT<small>CRYOVANTA GAME HUB · MAX 7 PER ROOM</small></h1>
+    <div class="muted"><a href="/?screen" style="color:#00e5ff">📺 Usa questo schermo come TV (telefoni = joypad)</a></div>
     <div class="row"><input id="name" maxlength="16" placeholder="Nome robot" /></div>
     <div id="menu">
       <div class="row"><button id="quick">⚡ Partita rapida</button><button id="create">🔒 Stanza privata</button></div>
@@ -71,6 +84,23 @@
     <div id="results" style="display:none"></div>
     <div id="err"></div>
   </div>
+  <div id="screenPanel" class="panel">
+    <h1>NEON CIRCUIT<small>SCHERMO DI GIOCO · I TELEFONI SONO I JOYPAD</small></h1>
+    <div class="cols" style="margin-top:14px">
+      <div><div id="qr"></div><div class="muted" style="text-align:center; margin-top:8px">Scansiona col telefono<br/><span id="joinUrl" style="word-break:break-all"></span></div></div>
+      <div>
+        <div class="muted">Codice stanza</div><div class="big-code" id="scode">—</div>
+        <div class="muted" id="scount" style="margin-top:6px"></div>
+        <ul id="smembers"></ul>
+        <div class="row"><select id="sMap"></select><select id="sMode"></select></div>
+        <div class="muted" id="sDesc" style="margin-top:6px"></div>
+        <button id="sStart">▶ Avvia partita</button>
+        <div class="muted" style="margin-top:6px">Ogni giocatore preme PRONTO sul telefono (parte da solo), oppure avvia tu da qui. F = schermo intero.</div>
+        <div id="sResults" style="display:none; margin-top:10px"></div><div id="sErr" class="err"></div>
+      </div>
+    </div>
+  </div>
+  <div id="board"></div>
   <div id="hud">
     <div class="tl" id="hrank"></div><div class="tr" id="hinfo"></div>
     <div class="item" id="hitem"></div><div class="big" id="hbig"></div><div class="toast" id="htoast"></div>

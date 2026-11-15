@@ -44,3 +44,6 @@ export const TUNING = {
   iceAccelMul: 0.15,
   iceFrictionMul: 0.06,
 } as const;
+
+/** Robot / player colours by slot (shared by the 3D scene, the lobby and the phone joypad). */
+export const PLAYER_COLORS = [0x2f7bff, 0xff4f8b, 0x35d07f, 0xffc233, 0x9b6bff, 0xff7a3d, 0x3fe0d0] as const;

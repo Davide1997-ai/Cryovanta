@@ -27,6 +27,8 @@ export class Client {
   /** Stable identity across reconnects. Secret: only ever sent to this client. */
   token = '';
   room: Room | null = null;
+  /** set when this connection is a big screen attached to a room (never a player) */
+  display: Room | null = null;
   slot = -1;
   greeted = false;
   readonly limiter: RateLimiter;

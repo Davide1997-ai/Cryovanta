@@ -23,23 +23,31 @@ apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--por
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 74 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 95 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
-### Giocare con gli smartphone (fino a 7 giocatori, stessa Wi-Fi)
+### Telefoni come joypad (fino a 7 giocatori) + PC come schermo
 
-```bash
-npm run lan
-```
+Il gioco si vede sul **PC** (o su una TV collegata al PC); ogni **telefono è un joypad**: niente grafica 3D sul telefono, solo comandi.
 
-Costruisce il client e avvia il server, che stampa gli indirizzi, ad esempio `http://192.168.1.20:8080`.
-Ogni telefono apre quell'indirizzo nel browser (stessa Wi-Fi del PC), scrive un nome e preme **Partita rapida** → **Pronto!**.
-Sul telefono compaiono joystick virtuale (pollice sinistro), **SALTA**, **TUFFO** e il pulsante oggetto; tieni il telefono in orizzontale.
-In basso a destra c'è un overlay diagnostico: `fps · draw calls · rtt · buf · err`. `buf` è il buffer anti-jitter (si allarga da solo se il Wi-Fi è instabile),
-`rtt` la latenza verso il PC. Se la connessione cade a metà partita il client si riconnette da solo (il server tiene lo slot per 20 s).
-Consigli per un Wi-Fi più stabile: PC **via cavo** (è lui che fa da server), telefoni sulla banda **5 GHz** vicini al router, risparmio energetico del telefono spento.
-Se Windows chiede di consentire Node nel firewall, accetta per le reti private. PC e telefoni possono giocare insieme nella stessa stanza.
+1. Sul PC lancia `start-game.bat` (o `npm run play`): si apre la **modalità schermo** con un **QR code** e il codice stanza.
+2. Sul telefono (stessa Wi-Fi) inquadra il QR: si apre il joypad. Scrivi il nome e premi **ENTRA**.
+3. La prima volta il browser avvisa *"connessione non privata"* (certificato locale generato dal gioco): **Avanzate → Prosegui**. È necessario perché i telefoni concedono accelerometro/giroscopio solo su HTTPS.
+4. Tieni il telefono **in orizzontale**. Premi **PRONTO!** (si calibra la posizione di riposo; **⟲ Centra** la ricalibra).
+
+| Comando | Cosa fa |
+|---|---|
+| **Inclina** il telefono | muove il robot (analogico: più inclini, più corri) |
+| **SALTA** | salta; premuto di nuovo in aria = propulsore |
+| **TUFFO** | scatto in avanti che spinge gli altri |
+| 🎁 | usa l'oggetto raccolto |
+
+Se i sensori non sono disponibili (o rifiuti il permesso) il joypad passa da solo al **joystick** a schermo; il pulsante in basso cambia modo.
+Il telefono vibra quando raccogli un oggetto, vieni colpito o tagli il traguardo. Lo schermo (PC) può scegliere mappa e modalità e premere **Avvia partita**;
+i telefoni non occupano altro che il proprio slot: **il limite di 7 vale per i giocatori**, gli schermi non contano.
+
+Senza HTTPS (o con `HTTPS_PORT=0`) tutto funziona comunque, ma solo col joystick.
 
 ### App desktop (.exe, offline)
 

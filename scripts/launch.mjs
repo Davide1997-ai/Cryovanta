@@ -52,7 +52,7 @@ if (flag('rebuild') || !existsSync(distIndex) || srcStamp > mtime(distIndex)) {
 // ---- 4. free port ------------------------------------------------------------------------------------------------
 const free = (p) => new Promise((res) => { const s = createServer(); s.once('error', () => res(false)); s.once('listening', () => s.close(() => res(true))); s.listen(p, '0.0.0.0'); });
 let port = Number(opt('port', process.env.PORT ?? 8080));
-for (let i = 0; i < 20 && !(await free(port)); i++) port++;
+for (let i = 0; i < 40 && !((await free(port)) && (await free(port + 1))); i++) port++; // HTTP on `port`, HTTPS (phones' motion sensors) on port+1
 
 // ---- 5. start the server ------------------------------------------------------------------------------------------
 const require = createRequire(import.meta.url);
@@ -69,23 +69,26 @@ for (let i = 0; i < 60 && !(await healthy()); i++) await new Promise((r) => setT
 if (!(await healthy())) die('Il server non risponde.');
 
 // ---- 6. open browser + phone URL ----------------------------------------------------------------------------------
-const local = `http://localhost:${port}`;
-const ips = Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
-const pref = (a) => (/^192\.168\./.test(a) ? 0 : /^10\./.test(a) ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(a) ? 2 : 3);
-ips.sort((a, b) => pref(a) - pref(b));
-const phone = ips[0] ? `http://${ips[0]}:${port}` : null;
+const info = await new Promise((res) => get({ host: '127.0.0.1', port, path: '/info', timeout: 1500 }, (r) => { let d = ''; r.on('data', (x) => (d += x)); r.on('end', () => { try { res(JSON.parse(d)); } catch { res(null); } }); }).on('error', () => res(null)));
+const screenUrl = `http://localhost:${port}/?screen`;
+const ips = info?.ips ?? [];
+const httpsPort = info?.httpsPort ?? null;
+const padFor = (ip) => (httpsPort ? `https://${ip}:${httpsPort}/pad.html` : `http://${ip}:${port}/pad.html`);
+const phone = ips[0] ? padFor(ips[0]) : null;
 
 console.log('\n' + c.g('✔ Gioco pronto!'));
-console.log(`  ${c.b('Su questo PC:')}   ${local}`);
-for (const ip of ips) console.log(`  ${c.b('Su smartphone:')}  http://${ip}:${port}${ip === ips[0] ? '   ← prova questo (stessa Wi-Fi)' : ''}`);
+console.log(`  ${c.b('Schermo (PC):')}     ${screenUrl}   ← si apre da solo`);
+for (const ip of ips) console.log(`  ${c.b('Joypad telefono:')}  ${padFor(ip)}${ip === ips[0] ? '   ← inquadra il QR / apri questo' : ''}`);
+if (httpsPort) console.log(c.y('  Sul telefono il browser avvisa "connessione non privata" (certificato locale): scegli Avanzate → Prosegui. Serve per usare l\'inclinazione.'));
+else console.log(c.y('  HTTPS non disponibile: i telefoni useranno il joystick a schermo invece dell\'inclinazione.'));
 console.log(c.y('  Se Windows chiede il firewall, consenti Node sulle reti private.'));
 console.log('  Premi Ctrl+C per chiudere.\n');
 
 if (!flag('no-qr') && phone) {
-  try { const qr = (await import('qrcode-terminal')).default; console.log('  Inquadra col telefono:'); qr.generate(phone, { small: true }, (q) => console.log(q.split('\n').map((l) => '    ' + l).join('\n'))); }
+  try { const qr = (await import('qrcode-terminal')).default; console.log('  Inquadra col telefono (joypad):'); qr.generate(phone, { small: true }, (q) => console.log(q.split('\n').map((l) => '    ' + l).join('\n'))); }
   catch { /* optional dependency */ }
 }
 if (!flag('no-open')) {
-  const [cmd, a] = isWin ? ['cmd', ['/c', 'start', '""', local]] : process.platform === 'darwin' ? ['open', [local]] : ['xdg-open', [local]];
+  const [cmd, a] = isWin ? ['cmd', ['/c', 'start', '""', screenUrl]] : process.platform === 'darwin' ? ['open', [screenUrl]] : ['xdg-open', [screenUrl]];
   try { spawn(cmd, a, { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch { /* user can open it manually */ }
 }

@@ -228,3 +228,48 @@ describe('room options (map + mode)', () => {
     const r = a.log.find((m) => m.k === 'round'); expect(r && r.k === 'round' && [r.map, r.mode]).toEqual(['frost-run', 'race']);
   });
 });
+
+describe('big screen (TV) role', () => {
+  const screen = () => { const s = w.connect('TV'); s.send({ k: 'screen', game: GAME }); return s; };
+  it('a screen creates a public room, is NOT a player and does not take one of the 7 slots', () => {
+    const tv = screen(); expect(tv.isScreen).toBe(true); expect(tv.room!.displays).toBe(1); expect(tv.room!.members).toHaveLength(0);
+    const code = tv.room!.code; const phones = Array.from({ length: 7 }, (_, i) => { const p = w.connect('p' + i); p.send({ k: 'join', code }); return p; });
+    expect(phones.every((p) => p.inRoom)).toBe(true); expect(w.hub.rooms.get(code)!.size).toBe(7);
+    const late = w.connect('late'); late.send({ k: 'join', code }); expect(late.errors).toEqual(['ROOM_FULL']);   // the cap still binds PLAYERS
+    expect(tv.room!.members).toHaveLength(7);
+  });
+  it('phones that "quick play" land in the room that has a screen', () => {
+    const other = w.connect('other'); other.send({ k: 'create', game: GAME, isPrivate: false }); const a = w.connect('a'); a.send({ k: 'quickplay', game: GAME });
+    const tv = screen(); const b = w.connect('b'); b.send({ k: 'quickplay', game: GAME });
+    expect(b.room!.code).toBe(tv.room!.code);
+  });
+  it('a screen cannot send inputs / ready / join, and the room survives with only the screen attached', () => {
+    const tv = screen(); tv.send({ k: 'ready', ready: true }); tv.send({ k: 'quickplay', game: GAME });
+    expect(tv.errors).toEqual(['BAD_REQUEST', 'BAD_REQUEST']);
+    const p = w.connect('p'); p.send({ k: 'join', code: tv.room!.code }); p.send({ k: 'leave' });
+    expect(w.hub.rooms.has(tv.room!.code)).toBe(true);            // screen keeps the room alive
+    tv.disconnect(); expect(w.hub.rooms.size).toBe(0);              // last screen gone => garbage collected
+  });
+  it('screen picks map/mode and can force the start (needs 2+ players)', () => {
+    const tv = screen(); const code = tv.room!.code;
+    tv.send({ k: 'config', map: 'titan-gauntlet', mode: 'grandprix' }); expect(tv.room!.options).toEqual({ map: 'titan-gauntlet', mode: 'grandprix' });
+    const a = w.connect('a'); a.send({ k: 'join', code }); tv.send({ k: 'start' }); expect(tv.errors).toEqual(['BAD_REQUEST']);
+    const b = w.connect('b'); b.send({ k: 'join', code }); tv.send({ k: 'start' });
+    expect(tv.room!.phase).toBe('countdown');
+    w.run(300, () => tv.room!.phase === 'playing'); expect(tv.room!.phase).toBe('playing');
+  });
+  it('the screen receives round + snapshots (and a late screen gets the course too); players cannot force-start', () => {
+    const tv = screen(); const code = tv.room!.code; const a = w.connect('a'), b = w.connect('b');
+    a.send({ k: 'join', code }); b.send({ k: 'join', code }); a.send({ k: 'start' }); expect(a.errors).toEqual(['NOT_HOST']);
+    tv.send({ k: 'start' }); w.run(400, () => tv.room!.phase === 'playing'); w.run(30);
+    expect(tv.log.some((m) => m.k === 'round')).toBe(true);
+    const late = w.connect('TV2'); late.send({ k: 'screen', game: GAME, code }); expect(late.log.some((m) => m.k === 'round')).toBe(true);
+    expect(w.hub.rooms.get(code)!.displayCount).toBe(2);
+  });
+  it('a returning player (page reload) is sent the current round again', () => {
+    const a = w.connect('a'), b = w.connect('b'); a.send({ k: 'create', game: GAME, isPrivate: true }); b.send({ k: 'join', code: a.room!.code });
+    [a, b].forEach((x) => x.send({ k: 'ready', ready: true })); w.run(400, () => a.room!.phase === 'playing'); w.run(5);
+    const token = b.token; b.disconnect(); const back = w.connect('b2'); back.hello(token);
+    expect(back.log.some((m) => m.k === 'round')).toBe(true);
+  });
+});

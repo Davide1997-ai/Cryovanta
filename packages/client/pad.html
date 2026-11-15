@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="theme-color" content="#070816" />
+  <title>Cryovanta — Joypad</title>
+  <style>
+    :root { --neon:#00e5ff; --pink:#ff3df2; --bg:#070816; --me:#00e5ff; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html, body { margin:0; height:100%; background:radial-gradient(120% 120% at 50% 0%, #1a1450 0%, var(--bg) 60%); color:#e8f0ff; font-family: ui-rounded, "Segoe UI", system-ui, sans-serif; overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
+    .screen { position:fixed; inset:0; padding:max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+    .hidden { display:none !important; }
+    h1 { margin:0; font-size:26px; letter-spacing:.06em; text-shadow:0 0 14px var(--neon); text-align:center; } h1 small { display:block; font-size:11px; letter-spacing:.28em; color:var(--pink); text-shadow:0 0 10px var(--pink); }
+    input, select { font:inherit; font-size:18px; width:min(420px,100%); padding:13px 14px; border-radius:14px; border:1px solid rgba(0,229,255,.55); background:rgba(0,229,255,.08); color:inherit; user-select:text; -webkit-user-select:text; }
+    input#code { text-transform:uppercase; letter-spacing:.3em; text-align:center; }
+    select option { color:#111; }
+    button { font:inherit; font-weight:800; color:#e8f0ff; border:2px solid var(--neon); background:linear-gradient(180deg, rgba(0,229,255,.35), rgba(0,229,255,.1)); border-radius:16px; padding:14px 18px; box-shadow:0 0 18px rgba(0,229,255,.35); }
+    button:active { filter:brightness(1.4); transform:scale(.97); }
+    .big { font-size:22px; width:min(420px,100%); padding:18px; }
+    .muted { opacity:.65; font-size:13px; text-align:center; max-width:440px; } .err { color:#ff6b6b; min-height:1.2em; font-size:14px; text-align:center; }
+    .swatch { flex:none; width:54px; height:54px; border-radius:50%; background:var(--me); box-shadow:0 0 22px var(--me); }
+    #plist { list-style:none; margin:0; padding:0; width:min(420px,100%); display:grid; gap:6px; max-height:34vh; overflow:auto; }
+    #plist li { display:flex; justify-content:space-between; padding:8px 12px; border-radius:12px; background:rgba(255,255,255,.06); } #plist .ok { color:#7cff3a; }
+    /* ---------- controller ---------- */
+    #play { padding:0; display:block; }
+    #hudTop { position:absolute; left:0; right:0; top:max(8px, env(safe-area-inset-top)); display:flex; justify-content:space-between; align-items:center; padding:0 max(18px, env(safe-area-inset-left)); font-weight:800; font-size:20px; pointer-events:none; text-shadow:0 0 10px var(--me); }
+    #who { display:flex; align-items:center; gap:10px; } #who i { width:16px; height:16px; border-radius:50%; background:var(--me); box-shadow:0 0 12px var(--me); }
+    #stickZone { position:absolute; left:0; top:18%; bottom:0; width:52%; }
+    #ring { position:absolute; left:calc(14% + env(safe-area-inset-left)); top:50%; width:150px; height:150px; margin-top:-62px; border-radius:50%; border:2px dashed rgba(0,229,255,.55); background:rgba(0,229,255,.07); pointer-events:none; }
+    #dot { position:absolute; left:50%; top:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%; background:var(--me); box-shadow:0 0 18px var(--me); }
+    #ringLbl { position:absolute; left:calc(14% + env(safe-area-inset-left)); width:150px; top:calc(50% + 100px); text-align:center; font-size:12px; opacity:.7; pointer-events:none; }
+    .tb { position:absolute; border-radius:50%; display:grid; place-items:center; font-weight:900; letter-spacing:.05em; border:3px solid var(--neon); background:rgba(0,10,30,.55); box-shadow:0 0 22px rgba(0,229,255,.5); touch-action:none; }
+    .tb.on { background:rgba(0,229,255,.6); transform:scale(.94); }
+    #bJump { right:calc(22px + env(safe-area-inset-right)); bottom:calc(24px + env(safe-area-inset-bottom)); width:132px; height:132px; font-size:22px; }
+    #bDive { right:calc(170px + env(safe-area-inset-right)); bottom:calc(20px + env(safe-area-inset-bottom)); width:88px; height:88px; font-size:14px; border-color:var(--pink); box-shadow:0 0 18px rgba(255,61,242,.5); }
+    #bItem { right:calc(60px + env(safe-area-inset-right)); bottom:calc(170px + env(safe-area-inset-bottom)); width:96px; height:96px; font-size:38px; border-color:#ffb020; box-shadow:0 0 20px rgba(255,176,32,.55); }
+    .mini { position:absolute; padding:8px 12px; font-size:12px; border-radius:12px; border-width:1px; box-shadow:none; } #modeBtn { left:calc(16px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); } #calBtn { left:calc(150px + env(safe-area-inset-left)); bottom:calc(10px + env(safe-area-inset-bottom)); }
+    #banner { position:absolute; left:50%; top:30%; transform:translate(-50%,-50%); font-size:60px; font-weight:900; text-shadow:0 0 28px var(--pink); pointer-events:none; text-align:center; }
+    #rot { position:fixed; inset:0; z-index:9; background:rgba(7,8,22,.96); display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px; font-size:20px; text-align:center; padding:30px; }
+    @media (max-height: 520px) {
+      #wait { gap:8px; } #wait .swatch { display:none; } #wait h1 { font-size:22px; }
+      #plist { grid-template-columns:1fr 1fr; max-height:38vh; width:min(640px,100%); } #plist li { padding:6px 10px; font-size:14px; }
+      #wait .big { padding:12px; font-size:20px; } #wait button { padding:10px 16px; }
+    }
+    @media (orientation: portrait) { body.playing #rot { display:flex; } }
+  </style>
+</head>
+<body>
+  <div id="rot"><div style="font-size:64px">📱↻</div>Ruota il telefono in <b>orizzontale</b></div>
+
+  <div id="join" class="screen">
+    <h1>NEON CIRCUIT<small>JOYPAD</small></h1>
+    <input id="name" maxlength="16" placeholder="Il tuo nome" autocomplete="off" />
+    <input id="code" maxlength="6" placeholder="CODICE STANZA (facoltativo)" autocomplete="off" />
+    <button id="enter" class="big">ENTRA</button>
+    <div id="secure" class="muted hidden"></div>
+    <div id="err" class="err"></div>
+    <div class="muted">Tieni il telefono in orizzontale: si muove inclinandolo. Il gioco si vede sullo schermo del PC.</div>
+  </div>
+
+  <div id="wait" class="screen hidden">
+    <div class="swatch"></div>
+    <h1 id="meName">—</h1>
+    <div class="muted">Stanza <b id="rcode">—</b> · <span id="rcount"></span> · <span id="rphase"></span></div>
+    <ul id="plist"></ul>
+    <div id="cfgRow" class="hidden" style="display:flex; gap:8px; width:min(420px,100%)"><select id="selMap"></select><select id="selMode"></select></div>
+    <button id="ready" class="big">PRONTO!</button>
+    <div style="display:flex; gap:10px"><button id="calib">⟲ Centra</button><button id="leave">Esci</button></div>
+    <div id="werr" class="err"></div>
+  </div>
+
+  <div id="play" class="screen hidden">
+    <div id="hudTop"><div id="who"><i></i><span id="pname"></span></div><div id="rank">#–</div><div id="status"></div></div>
+    <div id="stickZone"></div>
+    <div id="ring"><div id="dot"></div></div><div id="ringLbl">inclina per muoverti</div>
+    <div class="tb" id="bItem">🎁</div><div class="tb" id="bDive">TUFFO</div><div class="tb" id="bJump">SALTA</div>
+    <button class="mini" id="modeBtn">Joystick</button><button class="mini" id="calBtn">⟲ Centra</button>
+    <div id="banner"></div>
+  </div>
+
+  <div id="end" class="screen hidden"><h1>FINE PARTITA</h1><div id="results" style="font-size:20px; line-height:1.6; text-align:center"></div><button id="again" class="big">Torna alla stanza</button></div>
+  <script type="module" src="/src/pad.ts"></script>
+</body>
+</html>
