@@ -51,7 +51,7 @@ export class Stage {
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.baseDpr = Math.min(devicePixelRatio, this.lite ? 1.5 : 2); this.renderer.setPixelRatio(this.baseDpr);
+    this.baseDpr = Math.min(devicePixelRatio, 1.5); this.renderer.setPixelRatio(this.baseDpr);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 0.85;
     if (!this.lite) { this.renderer.shadowMap.enabled = true; this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; }
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -400,8 +400,8 @@ export class Stage {
     this.split = on;
     this.cullRange = on ? (views > 4 ? 150 : views > 1 ? 230 : 320) : 320;
     const fog = this.scene.fog as THREE.FogExp2 | null; if (fog) { if (this.fogBase === 0) this.fogBase = fog.density; fog.density = this.fogBase * (on && views > 4 && this.theme !== 'neon' ? 1.9 : 1); }
-    if (this.sun) this.sun.castShadow = !this.lite && (!on || views <= 1); // one shadow frustum cannot cover several distant players
-    const base = Math.min(devicePixelRatio, on ? (views > 2 ? 1.25 : 1.5) : this.lite ? 1.5 : 2);
+    if (this.sun) this.sun.castShadow = !this.lite && !this.noShadow && (!on || views <= 1); // one shadow frustum cannot cover several distant players
+    const base = Math.min(devicePixelRatio, on ? (views > 2 ? 1.25 : 1.5) : 1.5);
     if (base !== this.baseDpr) { this.baseDpr = base; this.renderer.setPixelRatio(base * this.dprScale); this.renderer.setSize(innerWidth, innerHeight, false); }
   }
   renderViews(views: { cam: THREE.PerspectiveCamera; rect: Rect; before?: () => void }[]) {
@@ -498,14 +498,27 @@ export class Stage {
 
   /** Dynamic resolution: trade sharpness for frame-rate so controls stay fluid on slow phones. */
   private baseDpr = 1; private dprScale = 1; private slowT = 0; private fastT = 0;
+  /** Quality tiers, cheapest visual loss first: resolution -> bloom -> shadows. Climbs back up when frames are fast. */
+  private noBloom = false; private noShadow = false; private warm = 0;
   adaptQuality(fps: number, dtSec: number) {
-    if (!this.lite && !this.split) return;
-    if (fps < 42) { this.slowT += dtSec; this.fastT = 0; } else if (fps > 56) { this.fastT += dtSec; this.slowT = 0; } else { this.slowT = this.fastT = 0; }
+    this.warm += dtSec; if (this.warm < 2) return; // ignore the shader-compile hitch right after load
+    if (fps < 45) { this.slowT += dtSec; this.fastT = 0; } else if (fps > 57) { this.fastT += dtSec; this.slowT = 0; } else { this.slowT = this.fastT = 0; }
     let changed = false;
-    if (this.slowT > 1.5 && this.dprScale > 0.45) { this.dprScale = Math.max(0.45, this.dprScale * 0.8); this.slowT = 0; changed = true; }
-    if (this.fastT > 5 && this.dprScale < 1) { this.dprScale = Math.min(1, this.dprScale * 1.15); this.fastT = 0; changed = true; }
-    if (changed) { this.renderer.setPixelRatio(this.baseDpr * this.dprScale); this.renderer.setSize(innerWidth, innerHeight, false); }
+    if (this.slowT > 1.0) {
+      this.slowT = 0;
+      if (this.dprScale > 0.7) { this.dprScale = Math.max(0.7, this.dprScale * 0.8); changed = true; }
+      else if (!this.lite && !this.noBloom) this.noBloom = true;
+      else if (!this.lite && !this.noShadow) { this.noShadow = true; if (this.sun) this.sun.castShadow = false; }
+      else if (this.dprScale > 0.45) { this.dprScale = Math.max(0.45, this.dprScale * 0.85); changed = true; }
+    }
+    if (this.fastT > 8) {
+      this.fastT = 0;
+      if (this.dprScale < 1) { this.dprScale = Math.min(1, this.dprScale * 1.15); changed = true; }
+      else if (this.noShadow) { this.noShadow = false; if (this.sun && !this.split) this.sun.castShadow = !this.lite; }
+      else if (this.noBloom) this.noBloom = false;
+    }
+    if (changed) { this.renderer.setPixelRatio(this.baseDpr * this.dprScale); this.renderer.setSize(innerWidth, innerHeight, false); this.composer.setSize(innerWidth, innerHeight); }
   }
 
-  render() { if (this.lite) this.renderer.render(this.scene, this.camera); else this.composer.render(); }
+  render() { if (this.lite || this.noBloom) this.renderer.render(this.scene, this.camera); else this.composer.render(); }
 }

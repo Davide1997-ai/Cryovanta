@@ -288,6 +288,7 @@ function hud(s: Snapshot) {
   $('hbig').textContent = s.rp === 'countdown' && s.mp === 'round' ? String(Math.ceil(s.left)) : '';
 }
 
+const fDesired = new THREE.Vector3(), fLook = new THREE.Vector3();
 function follow(dt: number, s: Snapshot) {
   if ((window as any).__cv?.freeCam) return; // debug: lets tests/QA inspect any part of the map
   let tgt = predictor && s.players[me]?.al ? { x: predictor.state.x, y: predictor.state.y, z: predictor.state.z } : null;
@@ -297,9 +298,9 @@ function follow(dt: number, s: Snapshot) {
   }
   const yaw = input.camYaw, sx = Math.sin(yaw), cz = Math.cos(yaw);
   const back = SCREEN ? 13 : 9.5, up = SCREEN ? 7.6 : 5.4;
-  const desired = new THREE.Vector3(tgt.x - sx * back, tgt.y + up, tgt.z - cz * back);
+  const desired = fDesired.set(tgt.x - sx * back, tgt.y + up, tgt.z - cz * back);
   camPos.lerp(desired, 1 - Math.exp(-7 * dt));
-  camLook.lerp(new THREE.Vector3(tgt.x + sx * 5, tgt.y + 1.4, tgt.z + cz * 5), 1 - Math.exp(-10 * dt));
+  camLook.lerp(fLook.set(tgt.x + sx * 5, tgt.y + 1.4, tgt.z + cz * 5), 1 - Math.exp(-10 * dt));
   stage.camera.position.copy(camPos); stage.camera.lookAt(camLook);
 }
 
