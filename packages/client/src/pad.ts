@@ -9,6 +9,7 @@ import { DEFAULT_TILT, screenAngles, smooth, tiltToMove, type Angles } from './t
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const GAME = 'neon-circuit', ICON: Record<string, string> = { boost: '⚡', seeker: '🎯', hazard: '🧱', shield: '🛡️' };
 const q = new URLSearchParams(location.search);
+const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 const net = new Net();
 
 // ---- never let the browser zoom/scroll the controller (iOS Safari ignores user-scalable=no) ----
@@ -57,7 +58,6 @@ let tJump = false, jumpLatch = false, diveLatch = false, useLatch = false, tDive
 
 const show = (id: 'join' | 'wait' | 'play' | 'end') => { for (const s of ['join', 'wait', 'play', 'end']) $(s).classList.toggle('hidden', s !== id); document.body.classList.toggle('playing', id === 'play'); };
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 const orient = () => (screen.orientation?.angle ?? (window as any).orientation ?? 0) as number;
 const buzz = (p: number | number[]) => { try { navigator.vibrate?.(p); } catch { /* iOS: no vibration API */ } };
 
