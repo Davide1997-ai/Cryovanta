@@ -315,10 +315,12 @@ renderRoom();
 requestAnimationFrame(frame);
 
 // ------------------------------------------------------------------ big-screen mode
-let info: { ips: string[]; port: number; httpsPort: number | null } | null = null, qrFor = '';
+let info: { ips: string[]; port: number; httpsPort: number | null } | null = null, qrFor = '', ipIdx = 0;
+$('qr').addEventListener('click', () => { if (info && info.ips.length > 1) { ipIdx++; renderScreen(); } });
 function joinUrl(code: string) {
   // plain HTTP: no certificate warning on the phone (HTTPS is only needed for the optional tilt control)
-  const host = info?.ips[0] ?? location.hostname;
+  const local = /^(localhost|127\.|\[?::1)/.test(location.hostname); // screen opened via a LAN address: that address is proven reachable
+  const host = !local ? location.hostname : info?.ips.length ? info.ips[ipIdx % info.ips.length] : location.hostname;
   return `http://${host}:${info?.port ?? location.port}/pad.html?room=${code}`;
 }
 function renderScreen() {
@@ -326,7 +328,7 @@ function renderScreen() {
   $('screenPanel').style.display = playing ? 'none' : 'block'; $('hud').style.display = playing ? 'block' : 'none'; if (!playing) hideCells();
   if (!room) return;
   const url = joinUrl(room.code);
-  if (qrFor !== url) { qrFor = url; const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); $('joinUrl').textContent = url.replace(/^https?:\/\//, '').replace('/pad.html', '/…'); }
+  if (qrFor !== url) { qrFor = url; const qr = qrcode(0, 'M'); qr.addData(url); qr.make(); $('qr').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); $('joinUrl').textContent = url.replace(/^https?:\/\//, '') + (info && info.ips.length > 1 ? `  (rete ${ipIdx % info.ips.length + 1}/${info.ips.length}: tocca il QR se non si collega)` : ''); }
   $('scode').textContent = room.code;
   $('smembers').innerHTML = room.members.length ? room.members.map((m) => `<li><span style="color:#${ROBOT_COLORS[m.slot].toString(16).padStart(6, '0')}">● ${esc(m.name)} <small style="opacity:.7">Lv${m.level}</small>${m.host ? ' 👑' : ''}</span><span class="${m.ready ? 'ready' : 'muted'}">${!m.connected ? 'offline' : m.ready ? 'PRONTO' : '…'}</span></li>`).join('') : '<li class="muted">Nessun giocatore: scansiona il QR con il telefono</li>';
   $('scount').textContent = `${room.members.length}/7 giocatori · ${room.phase === 'countdown' ? 'via tra ' + room.countdown + '…' : 'in attesa'}`;

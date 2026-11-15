@@ -18,9 +18,15 @@ export interface RunningServer { hub: Hub; port: number; httpsPort: number | nul
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.map': 'application/json' };
 
+const VIRTUAL_NIC = /vethernet|virtualbox|vmware|vmnet|vbox|hyper-v|wsl|docker|br-|veth|virbr|tailscale|zerotier|hamachi|vpn|tap|tun|loopback|pseudo|bluetooth|utun|awdl|llw/i;
+/** Reachable LAN addresses, real Wi-Fi/Ethernet first; virtual adapters (Hyper-V, WSL, VirtualBox, VPN…) and link-local are dropped unless nothing else exists. */
 export function lanAddresses(): string[] {
+  const all: { name: string; address: string }[] = [];
+  for (const [name, list] of Object.entries(networkInterfaces())) for (const i of list ?? []) if (i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254.')) all.push({ name, address: i.address });
   const pref = (a: string) => (/^192\.168\./.test(a) ? 0 : /^10\./.test(a) ? 1 : /^172\.(1[6-9]|2\d|3[01])\./.test(a) ? 2 : 3);
-  return Object.values(networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i!.address).sort((a, b) => pref(a) - pref(b));
+  const wifi = (n: string) => (/wi-?fi|wlan|wireless|en0|ethernet|eth0|enp|wlp|wlo/i.test(n) ? 0 : 1);
+  const real = all.filter((i) => !VIRTUAL_NIC.test(i.name));
+  return (real.length ? real : all).sort((x, y) => wifi(x.name) - wifi(y.name) || pref(x.address) - pref(y.address)).map((i) => i.address);
 }
 
 /**
