@@ -2,7 +2,7 @@
 Build every Blender-made asset used by the game and write them into packages/client/public/assets.
 
     pip install bpy pillow numpy          # Blender as a Python module (Python 3.13 wheel for Blender 5.x)
-    python tools/blender/build_assets.py
+    python tools/blender/build_assets.py [--models-only]
 
 Outputs (committed, so players never need Blender):
     assets/models.glb                      hero meshes (robot parts, item box, hazards)
@@ -17,6 +17,8 @@ RES = int(os.environ.get('TEX_RES', '1024'))
 
 
 def main():
+    if '--models-only' in sys.argv:
+        import meshes; os.makedirs(OUT, exist_ok=True); print('meshes ->', meshes.build_all(os.path.join(OUT, 'models.glb'))); return
     import tempfile
     from PIL import Image
     import textures, meshes

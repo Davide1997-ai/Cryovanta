@@ -39,12 +39,12 @@ def sample(f, a, b, n):
     return [f(a + (b - a) * i / n) for i in range(n + 1)]
 
 
-def capsule_profile(r, cyl, rings=22, radial=lambda z: 0.0):
+def capsule_profile(r, cyl, rings=22, radial=lambda z: 0.0, step=0.01):
     """Hemisphere - cylinder - hemisphere along Z; `radial(z)` adds to the radius (grooves, bands)."""
     pts = [(0.0, cyl / 2 + r)]
     for i in range(1, rings + 1):                       # upper hemisphere, ends at (r, cyl/2)
         a = math.pi / 2 * (1 - i / rings); pts.append((r * math.cos(a), cyl / 2 + r * math.sin(a)))
-    n = max(2, int(cyl / 0.01))
+    n = max(2, int(cyl / step))
     for i in range(1, n):                               # cylinder body
         pts.append((r, cyl / 2 - cyl * i / n))
     for i in range(0, rings + 1):                       # lower hemisphere, starts at (r, -cyl/2)
@@ -71,7 +71,7 @@ def finish(bm, name, sharp_deg=32, smooth=True):
 # ---------------------------------------------------------------- robot parts
 def torso():
     r, cyl = 0.30, 0.20
-    prof = capsule_profile(r, cyl, 26)
+    prof = capsule_profile(r, cyl, 10, step=0.014)
     def shape(x, y, z):
         ang = math.atan2(y, x); rad = math.hypot(x, y); nx, ny = (x / rad, y / rad) if rad > 1e-6 else (0, 0)
         d = 0.0
@@ -90,12 +90,12 @@ def torso():
             sd = math.hypot(y, z - 0.05)
             if sx * x > 0.1 and sd < 0.09: d -= 0.02 * (1 - (sd / 0.09) ** 2)
         return (nx * d, ny * d, 0.0)
-    return finish(lathe(prof, 72, shape), 'robot_torso')
+    return finish(lathe(prof, 32, shape), 'robot_torso')
 
 
 def skull():
     r = 0.27
-    prof = [(0.0, r)] + [(r * math.sin(t), r * math.cos(t)) for t in sample(lambda t: t, math.pi / 40, math.pi - math.pi / 40, 38)] + [(0.0, -r)]
+    prof = [(0.0, r)] + [(r * math.sin(t), r * math.cos(t)) for t in sample(lambda t: t, math.pi / 24, math.pi - math.pi / 24, 18)] + [(0.0, -r)]
     def shape(x, y, z):
         rad = math.hypot(x, y); nx, ny = (x / rad, y / rad) if rad > 1e-6 else (0, 0)
         d = groove(z, 0.02, 0.010, 0.010)                                                    # cranial seam
@@ -105,18 +105,18 @@ def skull():
                 d += 0.016 * (1 if ed > 0.085 else 0) - 0.008 * (1 if ed < 0.07 else 0)
         if y < -0.05 and z > 0.12 and z < 0.2: d += 0.006                                    # brow ridge (front)
         return (nx * d, ny * d, 0.0)
-    return finish(lathe(prof, 64, shape), 'robot_skull')
+    return finish(lathe(prof, 32, shape), 'robot_skull')
 
 
 def arm():
     r, cyl = 0.07, 0.16
-    prof = capsule_profile(r, cyl, 14, radial=lambda z: groove(z, -0.075, 0.006, 0.18) + groove(z, 0.065, 0.005, 0.12))
-    return finish(lathe(prof, 36), 'robot_arm')
+    prof = capsule_profile(r, cyl, 6, step=0.02, radial=lambda z: groove(z, -0.075, 0.006, 0.18) + groove(z, 0.065, 0.005, 0.12))
+    return finish(lathe(prof, 20), 'robot_arm')
 
 
 def foot():
     r = 0.13
-    pts = [(0.0, r)] + [(r * math.sin(t), r * math.cos(t)) for t in sample(lambda t: t, math.pi / 24, math.acos(-0.12 / 0.13), 24)]
+    pts = [(0.0, r)] + [(r * math.sin(t), r * math.cos(t)) for t in sample(lambda t: t, math.pi / 24, math.acos(-0.12 / 0.13), 12)]
     pts = [(p[0], max(p[1], -0.12)) for p in pts]                                           # flat sole
     pts.append((0.0, -0.12))
     def shape(x, y, z):
@@ -124,7 +124,7 @@ def foot():
         d = groove(z, 0.045, 0.01, 0.007) * (rad > 0.02)                                     # toe-cap seam
         if z < -0.09: d += 0.006 * (math.sin(math.atan2(y, x) * 9) > 0.4)                     # tread
         return (nx * d, ny * d, 0.0)
-    return finish(lathe(pts, 40, shape), 'robot_foot')
+    return finish(lathe(pts, 24, shape), 'robot_foot')
 
 
 def chest():
@@ -135,7 +135,7 @@ def chest():
         rad = math.hypot(x, y)
         if z > 0.02 and 0.115 < rad < 0.15: return (0, 0, -0.004)                            # inner groove
         return (0, 0, 0)
-    return finish(lathe(prof, 56, shape), 'robot_chest')
+    return finish(lathe(prof, 32, shape), 'robot_chest')
 
 
 # ---------------------------------------------------------------- hazards / pickups
@@ -150,9 +150,9 @@ def item_box():
 
 
 def ball():
-    prof = [(0.0, 1.0)] + [(math.sin(t), math.cos(t)) for t in sample(lambda t: t, math.pi / 36, math.pi - math.pi / 36, 34)] + [(0.0, -1.0)]
+    prof = [(0.0, 1.0)] + [(math.sin(t), math.cos(t)) for t in sample(lambda t: t, math.pi / 18, math.pi - math.pi / 18, 18)] + [(0.0, -1.0)]
     prof = [(p[0] * (1 + groove(p[1], 0.0, 0.05, 0.045) + groove(p[1], 0.52, 0.03, 0.03) + groove(p[1], -0.52, 0.03, 0.03)) if p[0] > 0 else 0.0, p[1]) for p in prof]
-    return finish(lathe(prof, 56), 'hz_ball')
+    return finish(lathe(prof, 32), 'hz_ball')
 
 
 def hub():
@@ -163,7 +163,7 @@ def hub():
         d = groove(z, 0.0, 0.035, 0.025) * (rad > 0.1)
         if z > h2 - 0.02 and 0.2 < rad < 0.5 and math.sin(math.atan2(y, x) * 6) > 0.85: d = 0
         return (nx * d, ny * d, 0)
-    return finish(lathe(prof, 48, shape), 'hz_hub')
+    return finish(lathe(prof, 32, shape), 'hz_hub')
 
 
 def build_all(out_path):

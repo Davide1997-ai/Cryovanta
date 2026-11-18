@@ -23,7 +23,8 @@ async function loadModels() {
 }
 
 export async function loadAssets(lite: boolean, aniso: number): Promise<void> {
-  const suf = lite ? '.512' : '';
+  // 512 px sets everywhere: 1024 px costs 4x the GPU memory/bandwidth for little visible gain at game camera distances (add ?hq for 1024)
+  const suf = lite || !/[?&]hq\b/.test(location.search) ? '.512' : '';
   const jobs: Promise<unknown>[] = [loadModels().catch(() => { /* procedural robot/hazards stay */ })];
   for (const k of KINDS) {
     jobs.push(Promise.all([loadTex(`${base}tex/${k}.albedo${suf}.webp`, true, aniso), loadTex(`${base}tex/${k}.height${suf}.webp`, false, aniso), loadTex(`${base}tex/${k}.rough${suf}.webp`, false, aniso)])

@@ -28,7 +28,7 @@ const net = new Net();
 import { loadAssets, models } from './assets';
 const robots = Array.from({ length: MAX_PLAYERS_PER_ROOM }, (_, i) => { const r = new Robot(i); stage.scene.add(r.root); r.root.visible = false; return r; });
 // Blender-made meshes + baked PBR textures load in the background; everything has a procedural fallback.
-void loadAssets(stage.lite, stage.renderer.capabilities.getMaxAnisotropy()).then(() => { robots.forEach((r) => r.upgrade()); stage.rebuild(); }).catch(() => { /* keep procedural look */ });
+void loadAssets(stage.lite, Math.min(4, stage.renderer.capabilities.getMaxAnisotropy())).then(() => { robots.forEach((r) => r.upgrade()); stage.rebuild(); }).catch(() => { /* keep procedural look */ });
 
 let room: RoomInfo | null = null;
 let me = -1;

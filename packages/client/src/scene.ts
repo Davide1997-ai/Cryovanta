@@ -220,8 +220,11 @@ export class Stage {
       const rough = { concrete: 0.9, wood: 0.7, candy: 0.35, grass: 0.95, metal: 0.4, conveyor: 0.6, bounce: 0.3, ice: 0.12, slime: 0.15, stripes: 0.5, snow: 0.85, stripesRW: 0.4 }[kind];
       const metal = kind === 'metal' ? 0.8 : 0;
       const rmap = t.rough, rr = rmap ? 1 : rough; // baked sets carry their own roughness map (absolute values)
-      const m = this.lite ? new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: rmap, roughness: rr, metalness: metal })
-        : new THREE.MeshPhysicalMaterial({ map: t.map, bumpMap: t.bump, bumpScale: (kind === 'ice' ? 0.2 : 1.2) * (rmap ? 2.2 : 1), roughnessMap: rmap, roughness: rr, metalness: metal, clearcoat: kind === 'ice' || kind === 'slime' || kind === 'bounce' || kind === 'candy' ? 0.8 : 0, clearcoatRoughness: 0.15 });
+      const coat = kind === 'ice' || kind === 'slime' || kind === 'bounce' || kind === 'candy';
+      // baked sets already carry their relief in the albedo/roughness: no screen-space bump (costly with 7 split views) and the cheaper
+      // standard shader unless the surface needs a clear-coat
+      const m = this.lite || (rmap && !coat) ? new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: rmap, roughness: rr, metalness: metal, bumpMap: !this.lite && !rmap ? t.bump : null, bumpScale: 1.2 })
+        : new THREE.MeshPhysicalMaterial({ map: t.map, bumpMap: rmap ? null : t.bump, bumpScale: kind === 'ice' ? 0.2 : 1.2, roughnessMap: rmap, roughness: rr, metalness: metal, clearcoat: coat ? 0.8 : 0, clearcoatRoughness: 0.15 });
       if (frost && kind !== 'ice') m.color.setHex(0xeaf4ff);
       return m;
     }) as THREE.MeshStandardMaterial;
