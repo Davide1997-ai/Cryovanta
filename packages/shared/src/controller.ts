@@ -65,13 +65,21 @@ export function moveBody(b: Body, hw: number, h: number, course: Course, tick: n
   return { grounded, platformId };
 }
 
+/** Newtonian hand-off: leaving a moving platform keeps its velocity (a jump from a lift goes up faster, a hop off a mover keeps drifting). */
+function inheritPlatform(p: PlayerState, pl: Course['platforms'][number] | undefined, tick: number) {
+  if (!pl || (pl.kind !== 'mover' && pl.kind !== 'piston')) return;
+  platformCenter(pl, tick, _c1); platformCenter(pl, tick - 1, _c0);
+  p.ivx = (_c1.x - _c0.x) / DT; p.ivz = (_c1.z - _c0.z) / DT; p.ivy = Math.max(0, (_c1.y - _c0.y) / DT);
+  p.vx += p.ivx; p.vz += p.ivz;
+}
+
 export function createPlayer(slot: number, spawn: [number, number, number]): PlayerState {
   return {
     slot, x: spawn[0], y: spawn[1], z: spawn[2], vx: 0, vy: 0, vz: 0, yaw: 0,
     grounded: false, platformId: -1, coyote: 0, jumpBuf: 0, jumpHeld: false, hoverFuel: T.hoverFuel, hovering: false,
     diveCd: 0, diving: 0, stun: 0, boost: 0, shield: 0, invuln: 0, respawn: 0, checkpoint: 0,
     item: null, useHeld: false, diveHeld: false, finishedAt: -1, finishRank: 0, alive: true,
-    pushCd: 0, pushing: 0, pushHeld: false, pushReq: false, grabHeld: false, grabbing: 0, grabCd: 0, grabTarget: -1, slow: 0, outAt: -1,
+    pushCd: 0, pushing: 0, pushHeld: false, pushReq: false, grabHeld: false, grabbing: 0, grabCd: 0, grabTarget: -1, slow: 0, ivx: 0, ivy: 0, ivz: 0, outAt: -1,
     team: -1, crowned: false, lastHitKind: '', lastHitBy: -1, lastHitTick: -1,
   };
 }
@@ -85,7 +93,7 @@ export function respawnPlayer(p: PlayerState, course: Course) {
     p.x = cp.spawn[0] + (p.slot - 3) * 0.9; p.y = cp.spawn[1] + 0.05; p.z = cp.spawn[2];
   }
   p.vx = p.vy = p.vz = 0; p.stun = 0; p.boost = 0; p.diving = 0; p.hovering = false;
-  p.invuln = 1.5; p.respawn = 0; p.platformId = -1; p.hoverFuel = T.hoverFuel;
+  p.invuln = 1.5; p.respawn = 0; p.platformId = -1; p.ivx = p.ivy = p.ivz = 0; p.hoverFuel = T.hoverFuel;
 }
 
 export function sanitizeInput(i: InputFrame): InputFrame {
@@ -121,8 +129,9 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   if (surf === 'ice') accel *= wantsMove ? T.iceAccelMul : T.iceFrictionMul; // slippery: slow to start, slow to stop
   const steer = p.diving > 0 ? 0.15 : 1; // committed dive = limited steering
   if (p.diving <= 0 || wantsMove) {
-    p.vx = approach(p.vx, mx * speed, accel * steer * DT);
-    p.vz = approach(p.vz, mz * speed, accel * steer * DT);
+    // airborne steering acts on the velocity relative to the platform we left (momentum is conserved, not fought)
+    p.vx = approach(p.vx, (p.grounded ? 0 : p.ivx) + mx * speed, accel * steer * DT);
+    p.vz = approach(p.vz, (p.grounded ? 0 : p.ivz) + mz * speed, accel * steer * DT);
   }
   if (wantsMove && p.diving <= 0) p.yaw = lerpAngle(p.yaw, Math.atan2(mx, mz), 1 - Math.exp(-18 * DT));
 
@@ -133,7 +142,8 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   if (jumpEdge && !noJump) p.jumpBuf = T.jumpBuffer;
   if (!inp.jump) p.hovering = false;
   if (!noJump && p.jumpBuf > 0 && (p.grounded || p.coyote > 0)) {
-    p.vy = T.jumpVelocity * (surf === 'slime' ? T.slimeJumpMul : 1); p.grounded = false; p.coyote = 0; p.jumpBuf = 0; p.platformId = -1;
+    inheritPlatform(p, under, tick);
+    p.vy = T.jumpVelocity * (surf === 'slime' ? T.slimeJumpMul : 1) + p.ivy; p.grounded = false; p.coyote = 0; p.jumpBuf = 0; p.platformId = -1;
   } else if (jumpEdge && !noJump && !p.grounded && p.hoverFuel > 0 && p.vy < T.hoverMaxRise) {
     p.hovering = true; // thruster hop (hold to burn fuel)
   }
@@ -180,15 +190,15 @@ export function stepPlayer(p: PlayerState, raw: InputFrame, course: Course, tick
   if (p.grounded && course.platforms[p.platformId]?.surface === 'bounce') { // trampoline: launched on contact
     p.vy = T.bounceVelocity; p.grounded = false; p.platformId = -1; p.coyote = 0; p.hovering = false;
   }
-  if (p.grounded) { p.coyote = T.coyoteTime; p.hoverFuel = T.hoverFuel; p.hovering = false; }
-  else if (wasGrounded && p.vy <= 0) p.coyote = T.coyoteTime;
+  if (p.grounded) { p.coyote = T.coyoteTime; p.hoverFuel = T.hoverFuel; p.hovering = false; p.ivx = p.ivy = p.ivz = 0; }
+  else if (wasGrounded && p.vy <= 0) { p.coyote = T.coyoteTime; if (p.ivx === 0 && p.ivz === 0) inheritPlatform(p, under, tick); } // walked off a moving deck
 
   // ---- race bookkeeping (pure, so prediction stays in sync with the server) ----
   if (p.grounded) {
     const cps = course.checkpoints;
     while (p.checkpoint + 1 < cps.length && p.z > cps[p.checkpoint + 1].z) p.checkpoint++;
   }
-  if (p.y < course.killY) { p.respawn = T.respawnDelay; p.vx = p.vy = p.vz = 0; p.boost = 0; p.stun = 0; p.diving = 0; }
+  if (p.y < course.killY) { p.respawn = T.respawnDelay; p.vx = p.vy = p.vz = 0; p.ivx = p.ivy = p.ivz = 0; p.boost = 0; p.stun = 0; p.diving = 0; }
 }
 
 function windActive(z: Course['zones'][number], tick: number) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { models } from './assets';
 import type { SnapPlayer } from '@cryovanta/shared';
 
 import { PLAYER_COLORS } from '@cryovanta/shared';
@@ -18,6 +19,7 @@ export class Robot {
   readonly root = new THREE.Group();
   private body = new THREE.Group();   // squash/stretch + lean applied here
   private head!: THREE.Group;
+  parts: Record<string, THREE.Mesh> = {};
   private armL!: THREE.Mesh; private armR!: THREE.Mesh;
   private flame!: THREE.Mesh; private shield!: THREE.Mesh; private trail!: THREE.Mesh; private stars = new THREE.Group();
   private small: THREE.Object3D[] = [];
@@ -48,7 +50,9 @@ export class Robot {
     this.armL = new THREE.Mesh(armG, white); this.armR = new THREE.Mesh(armG, white); this.armL.position.set(-0.4, 0.55, 0); this.armR.position.set(0.4, 0.55, 0);
     const footG = new THREE.SphereGeometry(0.13, 16, 12);
     const fl = new THREE.Mesh(footG, steel), fr = new THREE.Mesh(footG, steel); fl.position.set(-0.15, 0.12, 0.03); fr.position.set(0.15, 0.12, 0.03); fl.scale.set(1, 0.7, 1.35); fr.scale.set(1, 0.7, 1.35);
+    this.parts = { torso, chest, skull, armL: this.armL, armR: this.armR, fl, fr };
     this.body.add(torso, chest, core, this.head, this.armL, this.armR, fl, fr);
+    this.upgrade();
     this.small = [this.armL, this.armR, fl, fr, e1, e2, ant, tip, core, chest]; // hidden on far robots (LOD)
     this.flame = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.6, 14, 1, true), new THREE.MeshBasicMaterial({ color: 0x58f0ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.flame.rotation.x = Math.PI; this.flame.position.y = -0.1; this.flame.visible = false;
@@ -62,6 +66,15 @@ export class Robot {
     this.crownOn = makeHat(5, 1.25); this.crownOn.position.y = 0.2; this.crownOn.visible = false; this.head.add(this.crownOn);
     this.teamRing = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.05, 8, 32), new THREE.MeshBasicMaterial({ color: 0xffffff })); this.teamRing.rotation.x = Math.PI / 2; this.teamRing.position.y = 0.07; this.teamRing.visible = false;
     this.root.add(this.body, this.flame, this.shield, this.trail, this.stars, this.teamRing);
+  }
+
+  /** Swap the primitive shapes for the Blender-modelled parts (panel seams, vents, bevelled chest ring) once models.glb is loaded. */
+  upgrade() {
+    const map: [string, string][] = [['torso', 'robot_torso'], ['chest', 'robot_chest'], ['skull', 'robot_skull'], ['armL', 'robot_arm'], ['armR', 'robot_arm'], ['fl', 'robot_foot'], ['fr', 'robot_foot']];
+    for (const [part, model] of map) {
+      const g = models[model], m = this.parts[part];
+      if (g && m && m.geometry !== g) { m.geometry.dispose(); m.geometry = g; }
+    }
   }
 
   /** Colour + hat chosen on the phone (hats are unlocked by level on the server). */

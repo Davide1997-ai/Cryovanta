@@ -12,6 +12,7 @@ export function encodePlayer(p: PlayerState): SnapPlayer {
     st: q(p.stun), bo: q(p.boost), sh: q(p.shield), iv: q(p.invuln), rs: q(p.respawn),
     it: p.item, cp: p.checkpoint, fr: p.finishRank, al: p.alive ? 1 : 0,
     pc: q(p.pushCd), ph: q(p.pushing), gb: q(p.grabbing), sl: q(p.slow), gt: p.grabTarget, tm: p.team, cr: p.crowned ? 1 : 0,
+    ix: q(p.ivx), iy: q(p.ivy), iz: q(p.ivz),
   };
 }
 
@@ -41,7 +42,7 @@ export function decodePlayer(s: SnapPlayer, into?: PlayerState): PlayerState {
   p.coyote = s.cy; p.jumpBuf = s.jb; p.jumpHeld = s.jh === 1; p.hoverFuel = s.hf; p.diveCd = s.dc; p.diveHeld = s.dh === 1; p.platformId = s.pf;
   p.stun = s.st; p.boost = s.bo; p.shield = s.sh; p.invuln = s.iv; p.respawn = s.rs;
   p.item = s.it; p.checkpoint = s.cp; p.finishRank = s.fr; p.alive = s.al === 1;
-  p.pushCd = s.pc; p.pushing = s.ph; p.grabbing = s.gb; p.slow = s.sl; p.grabTarget = s.gt; p.team = s.tm; p.crowned = s.cr === 1;
+  p.pushCd = s.pc; p.pushing = s.ph; p.grabbing = s.gb; p.slow = s.sl; p.grabTarget = s.gt; p.team = s.tm; p.crowned = s.cr === 1; p.ivx = s.ix ?? 0; p.ivy = s.iy ?? 0; p.ivz = s.iz ?? 0;
   p.pushHeld = into?.pushHeld ?? false; p.pushReq = false; p.grabHeld = into?.grabHeld ?? false; p.grabCd = into?.grabCd ?? 0; p.outAt = into?.outAt ?? -1;
   p.useHeld = into?.useHeld ?? false; p.finishedAt = into?.finishedAt ?? -1;
   return p;

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import qrcode from 'qrcode-generator';
 import {
-  DT, EMOTES, HATS, TUNING, INTERP_DELAY_MS, LOOK_COLORS, SNAPSHOT_EVERY, TEAM_COLORS, TEAM_NAMES, TICK_RATE, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle,
+  DT, EMOTES, HATS, TUNING, INTERP_DELAY_MS, LOOK_COLORS, SNAPSHOT_EVERY, TEAM_COLORS, TEAM_NAMES, TICK_RATE, MAPS, MAP_IDS, MAX_PLAYERS_PER_ROOM, MODES, MODE_IDS, Predictor, buildMap, encodePlayer, lerp, lerpAngle, platformCenter,
   type Course, type InputFrame, type RoomInfo, type ServerMsg, type SnapPlayer, type Snapshot,
 } from '@cryovanta/shared';
 import { Input } from './input';
@@ -25,7 +25,10 @@ const canvas = $<HTMLCanvasElement>('c');
 const stage = new Stage(canvas);
 const input = new Input(canvas);
 const net = new Net();
+import { loadAssets, models } from './assets';
 const robots = Array.from({ length: MAX_PLAYERS_PER_ROOM }, (_, i) => { const r = new Robot(i); stage.scene.add(r.root); r.root.visible = false; return r; });
+// Blender-made meshes + baked PBR textures load in the background; everything has a procedural fallback.
+void loadAssets(stage.lite, stage.renderer.capabilities.getMaxAnisotropy()).then(() => { robots.forEach((r) => r.upgrade()); stage.rebuild(); }).catch(() => { /* keep procedural look */ });
 
 let room: RoomInfo | null = null;
 let me = -1;
@@ -184,7 +187,7 @@ function onMsg(m: ServerMsg) {
 
 // ------------------------------------------------------------------ main loop
 let fpsCount = 0, fpsT = performance.now(), fps = 0;
-(window as any).__cv = { get robots() { return robots; }, get robotPos() { return robotPos; }, get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
+(window as any).__cv = { get pcams() { return playerCams; }, get models() { return Object.keys(models); }, get robots() { return robots; }, get robotPos() { return robotPos; }, get cams() { return participants.map((s) => ({ slot: s, x: +playerCams[s].pos.x.toFixed(1), z: +playerCams[s].pos.z.toFixed(1) })); }, get interpDelay() { return interpDelay; }, freeCam: false, stage, net, get fps() { return fps; }, get predictor() { return predictor; }, get room() { return room; }, get latest() { return snaps[snaps.length - 1]?.s ?? null; } };
 let acc = 0, last = performance.now(), sendBuf: InputFrame[] = [], unsent = 0, lastSendT = 0;
 interface PlayerCam { cam: THREE.PerspectiveCamera; pos: THREE.Vector3; look: THREE.Vector3; init: boolean; baseY: number; yaw: number }
 const playerCams: PlayerCam[] = Array.from({ length: MAX_PLAYERS_PER_ROOM }, () => ({ cam: new THREE.PerspectiveCamera(60, 1, 0.1, 1800), pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, baseY: 0, yaw: 0 }));
@@ -223,6 +226,7 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 
+const rideA = { x: 0, y: 0, z: 0 }, rideB = { x: 0, y: 0, z: 0 };
 function render(dt: number, now: number) {
   fpsCount++; if (now - fpsT >= 1000) { fps = fpsCount * 1000 / (now - fpsT); fpsCount = 0; fpsT = now; }
   stage.adaptQuality(fps || 60, dt);
@@ -230,7 +234,10 @@ function render(dt: number, now: number) {
   const latest = snaps[snaps.length - 1]?.s;
   const splitting = SCREEN && inGameView && room?.phase === 'playing' && !!latest && participants.length > 0;
   stage.setSplit(splitting, participants.length);
-  const dynTick = predictor?.running ? predictor.tick : (latest?.tick ?? 0);
+  // Platforms must be drawn in the SAME time frame as the robots standing on them. Interpolated robots live ~50 ms in the past,
+  // so (without prediction) the platforms use the interpolated tick too; the predicted local robot lives "now", so it uses the predicted tick.
+  const interpTick = br ? lerp(br.a.s.tick, br.b.s.tick, br.f) : (latest?.tick ?? 0);
+  const dynTick = predictor?.running ? predictor.tick : interpTick;
   stage.syncPlatforms(dynTick);
   stage.syncDynamic(dynTick, dt, camLook);
   if (br && latest) {
@@ -241,6 +248,10 @@ function render(dt: number, now: number) {
         const p = predictor.state, sm = predictor.smooth;
         ps = { ...encodePlayer(p), it: latest.players[s].it };
         pos = { x: p.x + sm.x, y: p.y + sm.y, z: p.z + sm.z };
+      }
+      if (predictor?.running && s !== me && ps.g === 1 && ps.pf >= 0) { // remote robot riding a platform drawn at a different time: keep it glued to its deck
+        const pl = predictor.course.platforms[ps.pf];
+        if (pl && pl.kind !== 'static' && pl.kind !== 'blink') { platformCenter(pl, dynTick, rideA); platformCenter(pl, interpTick, rideB); pos = { x: pos.x + rideA.x - rideB.x, y: pos.y + rideA.y - rideB.y, z: pos.z + rideA.z - rideB.z }; }
       }
       robotPos[s].set(pos.x, pos.y, pos.z);
       robots[s].update(dt, ps, pos, splitting ? 0 : stage.camera.position.distanceTo(tmpV.set(pos.x, pos.y, pos.z)));
@@ -371,7 +382,7 @@ function splitFrame(dt: number, s: Snapshot) {
     // an eliminated player's cell spectates the leader; a falling robot is watched from the last ground height (no chasing into the void)
     const tgt = tmpV2.copy(p && p.al === 1 ? robotPos[slot] : leader);
     if (!p || p.al !== 1 || p.g === 1 || !pc.init) pc.baseY = tgt.y; else tgt.y = Math.max(tgt.y, pc.baseY);
-    followCam(pc, tgt, dt, (s.cy?.[slot] ?? 0) / 100);
+    if (!(window as any).__cv?.freeCam) followCam(pc, tgt, dt, (s.cy?.[slot] ?? 0) / 100); // freeCam: QA hook
     return { cam: pc.cam, rect: cells[i], before: () => { stage.focusView(pc.cam); for (let r = 0; r < robots.length; r++) robots[r].setDetail(pc.cam.position.distanceTo(robotPos[r]) < 24); } };
   });
   stage.renderViews(views);

@@ -46,6 +46,8 @@ export interface PlayerState {
   pushCd: number; pushing: number; pushHeld: boolean; pushReq: boolean; // shove (pushReq is a one-tick request consumed by the sim)
   grabHeld: boolean; grabbing: number; grabCd: number; grabTarget: number; // -1 = none
   slow: number;     // seconds of "being held / dragged": slower, cannot jump
+  /** momentum inherited from a moving platform when leaving it (airborne only); steering acts relative to it */
+  ivx: number; ivy: number; ivz: number;
   outAt: number;    // survival rounds: tick of elimination, -1 while alive
   team: number;     // -1 none, 0/1 team round
   crowned: boolean; // carrying the crown (slightly slower)

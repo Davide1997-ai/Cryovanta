@@ -23,7 +23,7 @@ apre il browser e stampa indirizzo + **QR code** per i telefoni. Opzioni: `--por
 npm install
 npm run dev:server     # ws://localhost:8080  (+ /healthz)
 npm run dev:client     # http://localhost:5173  (apri 2+ schede, "Partita rapida", "Pronto!")
-npm test               # 137 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
+npm test               # 140 test: fisica, impatti, lobby/cap, match completo via rete, ws reali
 npm run typecheck
 ```
 
@@ -117,3 +117,17 @@ Architettura, netcode, tabella degli impatti, come aggiungere un gioco: [docs/AR
 | `packages/server` | Hub, stanze (cap 7), loop a timestep fisso 60 Hz, sessione autoritativa di Neon Circuit |
 | `packages/client` | Three.js: robot procedurali, piattaforme neon, bloom, input, interpolazione, lobby/HUD |
 | `tests` | Vitest: harness in-process a tempo virtuale + test su WebSocket reali |
+
+## Grafica e fisica
+
+**Asset fatti con Blender.** `tools/blender/build_assets.py` usa Blender come libreria Python (`pip install bpy pillow numpy`, Python 3.13) e genera in `packages/client/public/assets`:
+- `models.glb`: parti del robot (busto con giunzioni, prese d'aria e incavo del petto, testa, braccia, piedi, anello cromato), cassa oggetti smussata, palla e mozzo degli ostacoli;
+- `tex/*`: 12 set di texture PBR tileabili (colore, altezza, rugosità) generati con i nodi procedurali di Blender e Cycles (rumore 4D su toro, quindi senza giunture), a 1024 px per il PC e 512 px per i telefoni.
+
+I file generati sono nel repository: per giocare **non serve Blender**. Se mancano o non si caricano, il gioco ricade sulle forme e texture procedurali. Rigenerare: `python tools/blender/build_assets.py` (circa 2–3 minuti, solo CPU).
+
+**Piattaforme mobili.** Le piattaforme sono disegnate nello stesso istante dei robot che ci stanno sopra (tick interpolato sullo schermo, tick predetto sul PC che gioca), e i robot remoti sopra una piattaforma restano incollati al piano.
+
+**Quantità di moto.** Chi salta o scende da una piattaforma mobile ne conserva la velocità (un salto da un ascensore sale di più, un salto da una navetta orizzontale continua a derivare) e in aria il controllo agisce relativamente a quella velocità. Il momento ereditato viaggia negli snapshot, così la predizione del client resta identica al server.
+
+**Qualità adattiva.** Se gli fps scendono sotto 45 il gioco riduce prima la risoluzione, poi il bloom, poi le ombre, e risale quando i frame tornano veloci.

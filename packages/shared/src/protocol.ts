@@ -54,6 +54,8 @@ export interface SnapPlayer {
   pc: number; ph: number; gb: number; sl: number; gt: number;
   /** team (-1 none) and crown carrier flag */
   tm: number; cr: 0 | 1;
+  /** inherited platform momentum */
+  ix: number; iy: number; iz: number;
 }
 export interface Snapshot {
   k: 'snap'; tick: number;

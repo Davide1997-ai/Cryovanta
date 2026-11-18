@@ -37,7 +37,16 @@ export const SPEC: Record<TexKind, Spec> = {
 
 const cache = new Map<string, { map: THREE.CanvasTexture; bump: THREE.CanvasTexture }>();
 
-export function surfaceTexture(kind: TexKind, size = 256): { map: THREE.CanvasTexture; bump: THREE.CanvasTexture } {
+/** Texture sets baked in Blender (assets.ts). They take over from the procedural canvas textures as soon as they are loaded. */
+export interface BakedSet { map: THREE.Texture; bump: THREE.Texture; rough: THREE.Texture }
+const baked = new Map<TexKind, BakedSet>();
+let bakedVersion = 0;
+export function registerBaked(kind: TexKind, set: BakedSet) { baked.set(kind, set); bakedVersion++; }
+/** Changes whenever new baked textures arrive; used to invalidate cached materials. */
+export const texVersion = () => bakedVersion;
+
+export function surfaceTexture(kind: TexKind, size = 256): { map: THREE.Texture; bump: THREE.Texture; rough?: THREE.Texture } {
+  const bk = baked.get(kind); if (bk) return bk;
   const key = kind + size; const hit = cache.get(key); if (hit) return hit;
   const sp = SPEC[kind], seed = kind.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7);
   const n1 = noise(size, seed, 6, 4), n2 = noise(size, seed + 99, 24, 2), r = rng(seed + 5);

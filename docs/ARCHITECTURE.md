@@ -211,3 +211,9 @@ match completo con 7 client e latenza, riconnessione, validazione/anti-cheat (JS
 
 > Il bot di test è volutamente ingenuo (non fa salti corti): completa ~80% dei seed casuali, quindi il test di regressione
 > richiede ≥ 70%. È un controllo di non-regressione sul generatore, **non** una prova di bilanciamento: serve playtest umano.
+
+## 9. Pipeline Blender e fisica delle piattaforme
+
+- `tools/blender/{textures,meshes,build_assets}.py` producono `models.glb` e i set PBR (vedi README). Il client li carica in `assets.ts`; `textures.ts` e `robot.ts` li sostituiscono alle versioni procedurali appena disponibili (`texVersion()` invalida i materiali in cache, `Stage.rebuild()` ricostruisce il percorso).
+- Piattaforme mobili: la posizione è funzione pura del tick. Il rendering usa il tick interpolato (schermo) o predetto (giocatore locale) in modo coerente con i robot; i robot remoti appoggiati a una piattaforma ricevono la differenza tra i due istanti.
+- `PlayerState.ivx/ivy/ivz` (snapshot `ix/iy/iz`): velocità ereditata lasciando una piattaforma `mover`/`piston`; azzerata all'atterraggio e al respawn. Test in `tests/physics.test.ts`.

@@ -8,7 +8,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { blinkPhase, groundBelow, hazardPose, platformCenter, windActive, type Course, type CourseHazard, type Platform, type Theme } from '@cryovanta/shared';
 import type { Rect } from './layout';
-import { bannerTexture, checkerStrip, cloudTexture, scaleBoxUV, surfaceTexture, waterNormal, windTexture, type TexKind } from './textures';
+import { bannerTexture, checkerStrip, cloudTexture, scaleBoxUV, surfaceTexture, texVersion, waterNormal, windTexture, type TexKind } from './textures';
+import { models } from './assets';
 
 export const NEON = [0x00e5ff, 0xff3df2, 0x7cff3a, 0xffb020, 0x8a6bff, 0xff4d4d];
 
@@ -155,6 +156,9 @@ export class Stage {
     if (this.water) this.water.position.y = course.killY + 8;
   }
 
+  /** Re-create the current course (used when Blender-baked textures / meshes finish loading). */
+  rebuild() { if (this.course) this.buildCourse(this.course); }
+
   private matCache = new Map<string, THREE.Material>();
   private mat(key: string, make: () => THREE.Material) { let m = this.matCache.get(key); if (!m) { m = make(); this.matCache.set(key, m); } return m; }
 
@@ -191,7 +195,7 @@ export class Stage {
     const strip = new THREE.Mesh(new THREE.PlaneGeometry(16, 2.2), new THREE.MeshBasicMaterial({ map: checkerStrip() })); strip.rotation.x = -Math.PI / 2; strip.position.y = 0.04; arch.add(strip);
     arch.position.set(0, goal.y + goal.hy, fz); this.courseGroup.add(arch);
     // item boxes (shared geometry/materials; colour is animated per box)
-    const cubeGeo = new THREE.BoxGeometry(0.9, 0.9, 0.9), ringGeo = new THREE.TorusGeometry(0.75, 0.035, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
+    const cubeGeo = models.item_box ? models.item_box.clone().scale(0.9, 0.9, 0.9) : new THREE.BoxGeometry(0.9, 0.9, 0.9), ringGeo = new THREE.TorusGeometry(0.75, 0.035, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff });
     for (const b of course.boxes) {
       const g = new THREE.Group();
       const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff3df2, emissiveIntensity: 1.4, roughness: 0.2 }));
@@ -211,12 +215,13 @@ export class Stage {
 
   // ---- giant daylight obstacle park (Titan Gauntlet / Frost Run) ----
   private parkMat(kind: TexKind, frost: boolean, key = ''): THREE.MeshStandardMaterial {
-    return this.mat('park' + kind + frost + key, () => {
+    return this.mat('park' + kind + frost + key + texVersion(), () => {
       const t = surfaceTexture(frost && kind === 'grass' ? 'snow' : kind, this.lite ? 128 : 256);
       const rough = { concrete: 0.9, wood: 0.7, candy: 0.35, grass: 0.95, metal: 0.4, conveyor: 0.6, bounce: 0.3, ice: 0.12, slime: 0.15, stripes: 0.5, snow: 0.85, stripesRW: 0.4 }[kind];
       const metal = kind === 'metal' ? 0.8 : 0;
-      const m = this.lite ? new THREE.MeshStandardMaterial({ map: t.map, roughness: rough, metalness: metal })
-        : new THREE.MeshPhysicalMaterial({ map: t.map, bumpMap: t.bump, bumpScale: kind === 'ice' ? 0.2 : 1.2, roughness: rough, metalness: metal, clearcoat: kind === 'ice' || kind === 'slime' || kind === 'bounce' || kind === 'candy' ? 0.8 : 0, clearcoatRoughness: 0.15 });
+      const rmap = t.rough, rr = rmap ? 1 : rough; // baked sets carry their own roughness map (absolute values)
+      const m = this.lite ? new THREE.MeshStandardMaterial({ map: t.map, roughnessMap: rmap, roughness: rr, metalness: metal })
+        : new THREE.MeshPhysicalMaterial({ map: t.map, bumpMap: t.bump, bumpScale: (kind === 'ice' ? 0.2 : 1.2) * (rmap ? 2.2 : 1), roughnessMap: rmap, roughness: rr, metalness: metal, clearcoat: kind === 'ice' || kind === 'slime' || kind === 'bounce' || kind === 'candy' ? 0.8 : 0, clearcoatRoughness: 0.15 });
       if (frost && kind !== 'ice') m.color.setHex(0xeaf4ff);
       return m;
     }) as THREE.MeshStandardMaterial;
@@ -260,7 +265,7 @@ export class Stage {
     if (!course.survival && !course.crown) this.addFinishLine(course, frost);
     if (course.crown) this.addCrown();
     // item boxes
-    const cubeGeo = new THREE.BoxGeometry(1, 1, 1), ringGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const cubeGeo = models.item_box ?? new THREE.BoxGeometry(1, 1, 1), ringGeo = new THREE.TorusGeometry(0.85, 0.04, 6, 24), ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const b of course.boxes) {
       const g = new THREE.Group();
       const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xff3df2, emissiveIntensity: 1.1, roughness: 0.2 })); cube.castShadow = !lite;
@@ -297,7 +302,7 @@ export class Stage {
     const g = new THREE.Group(), rw = this.parkMat('stripesRW', frost), steel = this.mat('hz-steel', () => new THREE.MeshStandardMaterial({ color: 0x8a919c, metalness: 0.9, roughness: 0.3 })), red = this.mat('hz-red', () => new THREE.MeshStandardMaterial({ color: 0xd93a2b, metalness: 0.2, roughness: 0.35 })), lite = this.lite;
     if (h.kind === 'spinner') {
       const bgeo = new THREE.BoxGeometry(h.len, h.radius * 2, h.radius * 2); scaleBoxUV(bgeo, h.len / 2, h.radius, h.radius, 2);
-      const bar = new THREE.Mesh(bgeo, rw), hub = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.9, 1.4, 20), red);
+      const bar = new THREE.Mesh(bgeo, rw), hub = new THREE.Mesh(models.hz_hub ?? new THREE.CylinderGeometry(0.75, 0.9, 1.4, 20), red);
       bar.castShadow = hub.castShadow = !lite;
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.8, 12), steel); pole.position.y = -0.7;
       g.add(bar, hub, pole); this.courseGroup.add(g); g.position.set(h.x, h.y, h.z); return { h, obj: g };
@@ -307,14 +312,14 @@ export class Stage {
       const beam = new THREE.Mesh(new THREE.BoxGeometry(w * 2 + 1, 0.8, 0.8), red); beam.position.set(h.x, h.y, h.z);
       for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.9, postH, 0.9), red); p.position.set(h.x + sx * w, h.y - postH / 2, h.z); p.castShadow = !lite; g.add(p); }
       beam.castShadow = !lite; g.add(beam);
-      const head = new THREE.Group(), ball = new THREE.Mesh(new THREE.SphereGeometry(h.radius, 24, 16), this.mat('hz-ball', () => new THREE.MeshStandardMaterial({ color: 0xff8a1f, metalness: 0.5, roughness: 0.3 }))); ball.castShadow = !lite; head.add(ball);
+      const head = new THREE.Group(), ball = new THREE.Mesh(models.hz_ball ?? new THREE.SphereGeometry(h.radius, 24, 16), this.mat('hz-ball', () => new THREE.MeshStandardMaterial({ color: 0xff8a1f, metalness: 0.5, roughness: 0.3 }))); ball.castShadow = !lite; if (models.hz_ball) ball.scale.setScalar(h.radius); head.add(ball);
       for (let i = 0; i < 10; i++) { const s = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 8), steel), d = new THREE.Vector3().setFromSphericalCoords(1, Math.acos(1 - 2 * ((i + 0.5) / 10)), i * 2.4); s.position.copy(d).multiplyScalar(h.radius + 0.12); s.lookAt(d.multiplyScalar(5)); s.rotateX(Math.PI / 2); head.add(s); }
       const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 6), steel); g.add(head, rope);
       this.courseGroup.add(g); return { h, obj: head, rope };
     }
     // roller: striped giant log rolling along the lane
     const geo = new THREE.CylinderGeometry(h.radius, h.radius, (h.halfWidth ?? 6) * 2, 32); geo.rotateZ(Math.PI / 2);
-    const mat = this.mat('hz-roller' + frost, () => { const t = surfaceTexture('stripesRW', lite ? 128 : 256).map.clone(); t.needsUpdate = true; t.repeat.set(6, 3); const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.45, metalness: 0.1 }); return m; });
+    const mat = this.mat('hz-roller' + frost + texVersion(), () => { const t = surfaceTexture('stripesRW', lite ? 128 : 256).map.clone(); t.needsUpdate = true; t.repeat.set(6, 3); const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.45, metalness: 0.1 }); return m; });
     const log = new THREE.Mesh(geo, mat); log.castShadow = !lite; g.add(log); this.courseGroup.add(g); g.position.set(h.x, h.y, h.z); return { h, obj: g };
   }
 
